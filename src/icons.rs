@@ -119,7 +119,7 @@ pub mod icon {
     pub const DISCONNECT: &str = "icons/unplug.svg";
     pub const DONE: &str = "icons/circle-check.svg";
     pub const FAILED: &str = "icons/circle-alert.svg";
-    pub const THEME: &str = "icons/sun-moon.svg";
+    pub const SETTINGS: &str = "icons/settings.svg";
     pub const NO_COLOR: &str = "icons/ban.svg";
     pub const TRUST: &str = "icons/shield-check.svg";
     pub const HIDDEN: &str = "icons/eye-off.svg";
@@ -214,7 +214,7 @@ mod tests {
             DISCONNECT,
             DONE,
             FAILED,
-            THEME,
+            SETTINGS,
             NO_COLOR,
             TRUST,
             HIDDEN,

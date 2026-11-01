@@ -5,6 +5,7 @@
 mod form;
 mod pane;
 mod render;
+mod settings;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -12,7 +13,9 @@ use std::{
     time::Duration,
 };
 
-use gpui::{App, AppContext, Context, Entity, FocusHandle, Focusable, ScrollStrategy, Window};
+use gpui::{
+    App, AppContext, Context, Entity, FocusHandle, Focusable, ScrollStrategy, Subscription, Window,
+};
 use gpui_component::{
     input::{InputEvent, InputState},
     resizable::ResizableState,
@@ -59,6 +62,7 @@ pub struct TransferRow {
 
 pub enum Modal {
     Site(Box<SiteForm>),
+    Settings,
     NewFolder {
         pane: usize,
         input: Entity<InputState>,
@@ -111,6 +115,8 @@ pub struct Workspace {
     /// Set by anything that wants the focused pane's list to take focus on
     /// the next frame: the element has to be mounted first.
     pub wants_focus: bool,
+    /// Follows the system's light or dark while no theme is chosen.
+    _appearance: Subscription,
 }
 
 impl Workspace {
@@ -175,6 +181,12 @@ impl Workspace {
             .detach();
         }
 
+        let appearance = cx.observe_window_appearance(window, |this, window, cx| {
+            if this.stored.settings.theme.is_none() {
+                this.apply_theme(None, window, cx);
+            }
+        });
+
         let mut this = Self {
             focus: cx.focus_handle(),
             stored,
@@ -193,6 +205,7 @@ impl Workspace {
             asker,
             status: None,
             wants_focus: true,
+            _appearance: appearance,
         };
         // The right pane starts one level into home, on Downloads when there
         // is one: two identical panes read as one pane drawn twice.
@@ -478,10 +491,26 @@ impl Workspace {
         let current = theme::theme(cx).name;
         let index = all.iter().position(|t| t.name == current).unwrap_or(0);
         let next = all[(index + 1) % all.len()];
-        theme::install_theme(next, window, cx);
-        self.stored.settings.theme = Some(next.name.to_string());
-        self.persist();
+        self.choose_theme(Some(next.name), window, cx);
         self.set_status(format!("Theme: {}", next.name), false);
+    }
+
+    /// Switch to a theme by name, or back to following the system with
+    /// `None`, and remember the choice.
+    pub fn choose_theme(
+        &mut self,
+        name: Option<&'static str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.apply_theme(name, window, cx);
+        self.stored.settings.theme = name.map(str::to_string);
+        self.persist();
+    }
+
+    fn apply_theme(&mut self, name: Option<&str>, window: &mut Window, cx: &mut Context<Self>) {
+        let system = theme::Appearance::of_system(window.appearance());
+        theme::install_theme(theme::starting_theme(name, system), window, cx);
         cx.notify();
     }
 
@@ -836,6 +865,7 @@ impl Workspace {
                     self.modal = Some(Modal::Site(form));
                 }
             }
+            Modal::Settings => {}
             Modal::NewFolder { pane, input } => {
                 let name = input.read(cx).value().trim().to_string();
                 if valid_name(&name) {

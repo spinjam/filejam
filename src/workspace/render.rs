@@ -73,6 +73,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleHidden, _, cx| this.toggle_hidden(cx)))
             .on_action(cx.listener(|this, _: &CycleTheme, window, cx| this.cycle_theme(window, cx)))
+            .on_action(
+                cx.listener(|this, _: &OpenSettings, window, cx| this.open_settings(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &Refresh, _, cx| this.refresh(this.active, cx)))
             .on_action(cx.listener(|this, _: &GoUp, _, cx| this.go_up(this.active, cx)))
             .on_action(cx.listener(|this, _: &GoBack, _, cx| this.go_back(this.active, cx)))
@@ -305,10 +308,16 @@ impl Workspace {
                 cx.notify();
             }))
             .into_any_element(),
-            ui::icon_button("theme", icons::THEME, Tone::Quiet, Control::Compact, t)
-                .tooltip("Next Theme")
-                .on_click(cx.listener(|this, _, window, cx| this.cycle_theme(window, cx)))
-                .into_any_element(),
+            ui::icon_button(
+                "settings",
+                icons::SETTINGS,
+                Tone::Quiet,
+                Control::Compact,
+                t,
+            )
+            .tooltip("Settings (⌘,)")
+            .on_click(cx.listener(|this, _, window, cx| this.open_settings(window, cx)))
+            .into_any_element(),
         ];
 
         ui::titlebar(
@@ -1206,6 +1215,7 @@ impl Workspace {
         } else {
             match self.modal.as_ref()? {
                 Modal::Site(form) => self.render_form(form, t, cx),
+                Modal::Settings => self.render_settings(t, cx),
                 Modal::NewFolder { input, .. } => ui::dialog(t)
                     .mt(px(120.))
                     .child(dialog_title(t, icons::NEW_FOLDER, "New Folder"))

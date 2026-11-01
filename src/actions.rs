@@ -12,6 +12,7 @@ actions!(
         ToggleTransfers,
         ToggleHidden,
         CycleTheme,
+        OpenSettings,
         Refresh,
         GoUp,
         GoBack,
@@ -48,6 +49,7 @@ pub fn bindings() -> Vec<KeyBinding> {
     vec![
         KeyBinding::new("cmd-q", Quit, None),
         KeyBinding::new("cmd-n", NewSite, None),
+        KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-alt-s", ToggleSidebar, None),
         KeyBinding::new("cmd-shift-t", ToggleTransfers, None),
         KeyBinding::new("cmd-shift-.", ToggleHidden, None),

@@ -95,7 +95,11 @@ fn menus() -> Vec<Menu> {
         Menu {
             name: "filejam".into(),
             disabled: false,
-            items: vec![MenuItem::action("Quit filejam", Quit)],
+            items: vec![
+                MenuItem::action("Settings…", OpenSettings),
+                MenuItem::separator(),
+                MenuItem::action("Quit filejam", Quit),
+            ],
         },
         Menu {
             name: "File".into(),
