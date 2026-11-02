@@ -57,7 +57,7 @@ fn main() {
 
             let options = WindowOptions {
                 window_background: theme.window_background(),
-                window_bounds: Some(gpui::WindowBounds::centered(size(px(1280.), px(800.)), cx)),
+                window_bounds: Some(starting_bounds(stored.settings.window, cx)),
                 window_min_size: Some(size(px(760.), px(480.))),
                 titlebar: Some(TitlebarOptions {
                     title: Some("filejam".into()),
@@ -155,4 +155,51 @@ fn menus() -> Vec<Menu> {
             ],
         },
     ]
+}
+
+/// Where the window left off, or the middle of the screen the first time, and
+/// when the display it was on has gone.
+fn starting_bounds(place: Option<store::WindowPlace>, cx: &App) -> gpui::WindowBounds {
+    let displays: Vec<gpui::Bounds<gpui::Pixels>> =
+        cx.displays().iter().map(|display| display.bounds()).collect();
+    match place.filter(|place| on_a_display(place, &displays)) {
+        Some(place) if place.maximized => gpui::WindowBounds::Maximized(place_bounds(&place)),
+        Some(place) => gpui::WindowBounds::Windowed(place_bounds(&place)),
+        None => gpui::WindowBounds::centered(size(px(1280.), px(800.)), cx),
+    }
+}
+
+fn place_bounds(place: &store::WindowPlace) -> gpui::Bounds<gpui::Pixels> {
+    gpui::Bounds::new(
+        point(px(place.x), px(place.y)),
+        size(px(place.width), px(place.height)),
+    )
+}
+
+fn on_a_display(place: &store::WindowPlace, displays: &[gpui::Bounds<gpui::Pixels>]) -> bool {
+    let bounds = place_bounds(place);
+    displays.iter().any(|display| display.intersects(&bounds))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn place(x: f32, y: f32) -> store::WindowPlace {
+        store::WindowPlace {
+            x,
+            y,
+            width: 800.,
+            height: 600.,
+            maximized: false,
+        }
+    }
+
+    #[test]
+    fn a_window_left_on_a_display_that_has_gone_is_not_restored_there() {
+        let laptop = gpui::Bounds::new(point(px(0.), px(0.)), size(px(1512.), px(982.)));
+        assert!(on_a_display(&place(100., 100.), &[laptop]));
+        assert!(!on_a_display(&place(3000., 100.), &[laptop]));
+        assert!(!on_a_display(&place(100., 100.), &[]));
+    }
 }

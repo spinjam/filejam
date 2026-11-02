@@ -53,6 +53,18 @@ impl Site {
     }
 }
 
+/// Where the window was left, in logical pixels. When maximized, the place it
+/// goes back to.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq)]
+pub struct WindowPlace {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    #[serde(default)]
+    pub maximized: bool,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,6 +74,8 @@ pub struct Settings {
     /// Whether each pane, left and right, shows its folder tree.
     #[serde(default)]
     pub folder_tree: [bool; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<WindowPlace>,
 }
 
 /// A folder pinned to the sidebar, on this computer or on a saved site.
@@ -231,6 +245,13 @@ mod tests {
                 theme: Some("Filejam Dark".into()),
                 show_hidden: true,
                 folder_tree: [true, false],
+                window: Some(WindowPlace {
+                    x: 40.,
+                    y: 60.5,
+                    width: 1440.,
+                    height: 900.,
+                    maximized: true,
+                }),
             },
             sites: vec![Site {
                 id: "web".into(),

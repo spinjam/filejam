@@ -17,7 +17,8 @@ use std::{
 };
 
 use gpui::{
-    App, AppContext, Context, Entity, FocusHandle, Focusable, ScrollStrategy, Subscription, Window,
+    App, AppContext, Context, Entity, FocusHandle, Focusable, ScrollStrategy, Subscription, Task,
+    Window, WindowBounds,
 };
 use gpui_component::{
     input::{InputEvent, InputState},
@@ -132,6 +133,10 @@ pub struct Workspace {
     pub wants_focus: bool,
     /// Follows the system's light or dark while no theme is chosen.
     _appearance: Subscription,
+    _window_bounds: Subscription,
+    /// The pending save of the window's place. Replaced by each move, so a
+    /// drag writes the file once, when it stops.
+    save_window: Option<Task<()>>,
 }
 
 impl Workspace {
@@ -203,6 +208,10 @@ impl Workspace {
             }
         });
 
+        let window_bounds = cx.observe_window_bounds(window, |this, window, cx| {
+            this.remember_window(window, cx);
+        });
+
         let mut this = Self {
             focus: cx.focus_handle(),
             stored,
@@ -222,6 +231,8 @@ impl Workspace {
             status: None,
             wants_focus: true,
             _appearance: appearance,
+            _window_bounds: window_bounds,
+            save_window: None,
         };
         // The right pane starts one level into home, on Downloads when there
         // is one: two identical panes read as one pane drawn twice.
@@ -639,6 +650,30 @@ impl Workspace {
         let system = theme::Appearance::of_system(window.appearance());
         theme::install_theme(theme::starting_theme(name, system), window, cx);
         cx.notify();
+    }
+
+    /// Keep the window's place for the next launch. Full screen is left out:
+    /// the app comes back windowed where it was before.
+    fn remember_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let state = window.window_bounds();
+        let bounds = state.get_bounds();
+        let place = store::WindowPlace {
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            width: f32::from(bounds.size.width),
+            height: f32::from(bounds.size.height),
+            maximized: matches!(state, WindowBounds::Maximized(_)),
+        };
+        if self.stored.settings.window == Some(place) {
+            return;
+        }
+        self.stored.settings.window = Some(place);
+        self.save_window = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(300))
+                .await;
+            let _ = this.update(cx, |this, _| this.persist());
+        }));
     }
 
     pub fn persist(&mut self) {
