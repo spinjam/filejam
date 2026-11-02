@@ -1,0 +1,201 @@
+# Builds filejam for macOS, Windows and Linux and publishes a GitHub release.
+#
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# The tag must match the version in Cargo.toml. Run it by hand from the
+# Actions tab (workflow_dispatch) to get the builds as artifacts without
+# publishing a release.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  BUNDLE_ID: io.github.spinjam.filejam
+
+jobs:
+  version:
+    name: Check version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [[ "$GITHUB_REF_TYPE" == "tag" && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+
+  macos:
+    name: macOS (universal)
+    needs: version
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Make sure the Metal compiler is there
+        run: xcrun -sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+      - name: Build
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+      - name: Bundle filejam.app
+        run: |
+          app=dist/filejam.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          lipo -create -output "$app/Contents/MacOS/filejam" \
+            target/aarch64-apple-darwin/release/filejam \
+            target/x86_64-apple-darwin/release/filejam
+          cat > "$app/Contents/Info.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>filejam</string>
+            <key>CFBundleDisplayName</key><string>filejam</string>
+            <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
+            <key>CFBundleExecutable</key><string>filejam</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>LSMinimumSystemVersion</key><string>${MACOSX_DEPLOYMENT_TARGET}</string>
+            <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>NSHumanReadableCopyright</key><string>GPL-3.0-only</string>
+          </dict>
+          </plist>
+          EOF
+          plutil -lint "$app/Contents/Info.plist"
+          # Ad-hoc signature: not trusted by Gatekeeper, but Apple Silicon
+          # refuses to run an unsigned binary at all.
+          codesign --force --deep --sign - "$app"
+          lipo -info "$app/Contents/MacOS/filejam"
+      - name: Make the disk image
+        run: |
+          mkdir -p dist/dmg
+          cp -R dist/filejam.app dist/dmg/
+          ln -s /Applications dist/dmg/Applications
+          hdiutil create -volname filejam -srcfolder dist/dmg -ov -format UDZO \
+            "dist/filejam-${VERSION}-macos-universal.dmg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  windows:
+    name: Windows (x86_64)
+    needs: version
+    runs-on: windows-latest
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        shell: pwsh
+        run: |
+          $dir = "dist/filejam-$env:VERSION-windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item target/release/filejam.exe, LICENSE, README.md $dir
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/*.zip
+          if-no-files-found: error
+
+  linux:
+    name: Linux (x86_64)
+    needs: version
+    # The oldest supported runner, so the binary runs on older glibc too.
+    runs-on: ubuntu-22.04
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config cmake \
+            libfontconfig1-dev libfreetype-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libvulkan-dev
+      - name: Install Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          name="filejam-${VERSION}-linux-x86_64"
+          mkdir -p "dist/$name"
+          cp target/release/filejam LICENSE README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: github.ref_type == 'tag'
+    needs: [version, macos, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'EOF'
+          ## Download
+
+          - **macOS** (Apple Silicon and Intel): the `.dmg` — drag filejam to Applications.
+            The app is not notarized: the first time, right-click it and choose **Open**,
+            or allow it under System Settings → Privacy & Security.
+          - **Windows**: the `.zip` — unzip and run `filejam.exe`.
+          - **Linux** (x86_64): the `.tar.gz` — needs Vulkan, and Wayland or X11.
+
+          EOF
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "filejam $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --generate-notes \
+            --verify-tag
