@@ -108,6 +108,7 @@ fn menus() -> Vec<Menu> {
             disabled: false,
             items: vec![
                 MenuItem::action("New Site…", NewSite),
+                MenuItem::action("New Tab", NewTab),
                 MenuItem::action("New Folder", NewFolder),
                 MenuItem::action("Add to Favorites", AddToFavorites),
                 MenuItem::separator(),
@@ -115,6 +116,7 @@ fn menus() -> Vec<Menu> {
                 MenuItem::action("Rename", Rename),
                 MenuItem::action("Delete", Delete),
                 MenuItem::separator(),
+                MenuItem::action("Close Tab", CloseTab),
                 MenuItem::action("Disconnect", Disconnect),
                 #[cfg(target_os = "macos")]
                 MenuItem::separator(),
@@ -147,6 +149,9 @@ fn menus() -> Vec<Menu> {
                 MenuItem::separator(),
                 MenuItem::action("Switch Pane", SwitchPane),
                 MenuItem::action("Swap Panes", SwapPanes),
+                MenuItem::separator(),
+                MenuItem::action("Next Tab", NextTab),
+                MenuItem::action("Previous Tab", PreviousTab),
             ],
         },
     ]

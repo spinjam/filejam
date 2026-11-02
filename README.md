@@ -30,6 +30,9 @@ cargo run --release  # optimised
 - New folder, rename, recursive delete (with confirmation), a filter,
   sorting by name, size, date or kind, hidden files, a breadcrumb (double
   click it to type a path, `~` works) and back/forward history.
+- Tabs in each pane, each its own folder, selection and history. Tabs on one
+  site share its connection, and closing the last of them ends it. Right click
+  a tab or a site for what it offers.
 - Themes: Filejam Black, Dark and Light, Gruvbox, Catppuccin, GitHub, Tokyo
   Night, Dracula and One, each dark and light, all but Black also as glass.
 
@@ -54,6 +57,9 @@ passphrases go in the system keychain, never in the file.
 | ⌘L | go to folder |
 | ⌘⇧. | show hidden files |
 | ⌘N | new site |
+| ⌘T, ⌘W | new tab, close tab |
+| ⌃⇥, ⌃⇧⇥ | next tab, previous tab |
+| ⌘⇧D | disconnect |
 | ⌘⇧T | transfers |
 | ⌘⌥S | sidebar |
 

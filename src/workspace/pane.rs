@@ -16,7 +16,58 @@ pub enum Location {
     Remote(String),
 }
 
+/// A tab while another is in front of its pane: everything [`Pane::trade`]
+/// swaps. Filter text is kept as text, since the pane has the one input.
+pub struct Tab {
+    pub location: Location,
+    pub path: String,
+    pub entries: Vec<Entry>,
+    pub rows: Vec<usize>,
+    pub selected: HashSet<String>,
+    pub cursor: Option<usize>,
+    pub anchor: Option<usize>,
+    pub sort: SortKey,
+    pub ascending: bool,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub back: Vec<(Location, String)>,
+    pub forward: Vec<(Location, String)>,
+    pub reveal: Option<String>,
+    pub tree: FolderTree,
+    pub filter: String,
+}
+
+impl Tab {
+    /// Nothing listed yet. An empty `path` on a site means wherever the site
+    /// starts, decided once it has connected.
+    pub fn new(location: Location, path: String) -> Self {
+        let mut tree = FolderTree::new(false);
+        tree.reset(matches!(location, Location::Remote(_)));
+        Self {
+            location,
+            path,
+            entries: Vec::new(),
+            rows: Vec::new(),
+            selected: HashSet::new(),
+            cursor: None,
+            anchor: None,
+            sort: SortKey::Name,
+            ascending: true,
+            loading: false,
+            error: None,
+            back: Vec::new(),
+            forward: Vec::new(),
+            reveal: None,
+            tree,
+            filter: String::new(),
+        }
+    }
+}
+
 pub struct Pane {
+    /// Every tab in strip order. The one in front is `None`: its state is
+    /// the fields below.
+    pub tabs: Vec<Option<Tab>>,
     pub location: Location,
     pub path: String,
     pub entries: Vec<Entry>,
@@ -54,6 +105,7 @@ pub struct Pane {
 impl Pane {
     pub fn new(path: String, tree: bool, window: &mut Window, cx: &mut App) -> Self {
         Self {
+            tabs: vec![None],
             location: Location::Local,
             path,
             entries: Vec::new(),
@@ -84,6 +136,7 @@ impl Pane {
     /// and scroll stay with the side, and so does whether the tree is on.
     pub fn swap_contents(&mut self, other: &mut Pane) {
         use std::mem::swap;
+        swap(&mut self.tabs, &mut other.tabs);
         swap(&mut self.location, &mut other.location);
         swap(&mut self.path, &mut other.path);
         swap(&mut self.entries, &mut other.entries);
@@ -102,6 +155,55 @@ impl Pane {
         swap(&mut self.tree.visible, &mut other.tree.visible);
         self.editing_path = false;
         other.editing_path = false;
+    }
+
+    /// Trade the tab in front for `tab`. The inputs, focus and scroll stay
+    /// with the side, and so does whether the tree is on.
+    pub fn trade(&mut self, tab: &mut Tab) {
+        use std::mem::swap;
+        swap(&mut self.location, &mut tab.location);
+        swap(&mut self.path, &mut tab.path);
+        swap(&mut self.entries, &mut tab.entries);
+        swap(&mut self.rows, &mut tab.rows);
+        swap(&mut self.selected, &mut tab.selected);
+        swap(&mut self.cursor, &mut tab.cursor);
+        swap(&mut self.anchor, &mut tab.anchor);
+        swap(&mut self.sort, &mut tab.sort);
+        swap(&mut self.ascending, &mut tab.ascending);
+        swap(&mut self.loading, &mut tab.loading);
+        swap(&mut self.error, &mut tab.error);
+        swap(&mut self.back, &mut tab.back);
+        swap(&mut self.forward, &mut tab.forward);
+        swap(&mut self.reveal, &mut tab.reveal);
+        swap(&mut self.tree, &mut tab.tree);
+        swap(&mut self.tree.visible, &mut tab.tree.visible);
+    }
+
+    /// The index of the tab in front.
+    pub fn front(&self) -> usize {
+        self.tabs.iter().position(Option::is_none).unwrap_or(0)
+    }
+
+    pub fn tab_location(&self, tab: usize) -> &Location {
+        match self.tabs.get(tab).and_then(Option::as_ref) {
+            Some(behind) => &behind.location,
+            None => &self.location,
+        }
+    }
+
+    pub fn tab_path(&self, tab: usize) -> &str {
+        match self.tabs.get(tab).and_then(Option::as_ref) {
+            Some(behind) => &behind.path,
+            None => &self.path,
+        }
+    }
+
+    /// The tab on `location`, the one in front if that is one of them.
+    pub fn tab_of(&self, location: &Location) -> Option<usize> {
+        if self.location == *location {
+            return Some(self.front());
+        }
+        (0..self.tabs.len()).find(|&tab| self.tab_location(tab) == location)
     }
 
     pub fn is_remote(&self) -> bool {

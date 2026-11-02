@@ -180,7 +180,7 @@ impl Workspace {
     pub(super) fn submit_form(
         &mut self,
         mut form: Box<SiteForm>,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), Box<SiteForm>> {
         let taken: Vec<String> = self.stored.sites.iter().map(|s| s.id.clone()).collect();
@@ -201,11 +201,11 @@ impl Workspace {
         // An edit takes effect on the next connect, so a live session with the
         // old settings is closed rather than left looking current.
         if was_editing && self.conns.contains_key(&id) {
-            self.disconnect(&id, cx);
+            self.disconnect(&id, window, cx);
         }
         if !was_editing {
             let active = self.active;
-            self.open_site(id, active, cx);
+            self.open_site(id, active, window, cx);
         }
         Ok(())
     }
@@ -253,6 +253,7 @@ impl Workspace {
         &self,
         form: &SiteForm,
         t: Theme,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let value = |input: &Entity<InputState>| input.read(cx).value().trim().to_string();
@@ -459,7 +460,7 @@ impl Workspace {
             .when_some(form.editing.clone(), |row, id| {
                 row.child(
                     ui::button("form-delete", "Delete", Tone::Quiet, Control::Standard, t)
-                        .on_click(cx.listener(move |this, _, _, cx| this.remove_site(&id, cx))),
+                        .on_click(cx.listener(move |this, _, window, cx| this.remove_site(&id, window, cx))),
                 )
             })
             .child(div().flex_1())
@@ -486,7 +487,7 @@ impl Workspace {
             .occlude()
             .mt(px(layout::FORM_TOP))
             .w(px(layout::FORM_WIDTH))
-            .max_h_full()
+            .max_h(ui::card_max_height(window, layout::FORM_TOP))
             .overflow_y_scroll()
             .p(px(layout::FORM_PADDING))
             .flex()

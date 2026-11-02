@@ -37,6 +37,9 @@ pub mod layout {
     pub const TITLEBAR_LEADING_INSET: f32 = 78.0;
     pub const STATUS_HEIGHT: f32 = 32.0;
     pub const PANE_HEADER_HEIGHT: f32 = CONTROL_HEIGHT_COMPACT + 2.0 * SPACE_SM;
+    pub const TAB_BAR_HEIGHT: f32 = CONTROL_HEIGHT_COMPACT + 2.0 * SPACE_XS;
+    pub const TAB_MIN_WIDTH: f32 = 84.0;
+    pub const TAB_MAX_WIDTH: f32 = 180.0;
     pub const COLUMN_HEADER_HEIGHT: f32 = 28.0;
     pub const ROW_HEIGHT: f32 = 26.0;
     pub const SIDEBAR_ROW_HEIGHT: f32 = 28.0;

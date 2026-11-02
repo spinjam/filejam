@@ -6,12 +6,13 @@ use std::{ops::Range, sync::atomic::Ordering};
 
 use gpui::{
     AnyElement, AppContext, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement,
-    MouseButton, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Window,
+    MouseButton, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    WeakEntity, Window,
     div, prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
     Disableable, Selectable,
-    menu::{ContextMenuExt, PopupMenuItem},
+    menu::{ContextMenuExt, PopupMenu, PopupMenuItem},
     input::Input,
     resizable::{h_resizable, resizable_panel},
 };
@@ -127,11 +128,29 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &Delete, _, cx| this.ask_delete(cx)))
             .on_action(cx.listener(|this, _: &Dismiss, window, cx| this.dismiss_modal(window, cx)))
             .on_action(cx.listener(|this, _: &Confirm, window, cx| this.confirm_modal(window, cx)))
-            .on_action(cx.listener(|this, _: &Disconnect, _, cx| {
+            .on_action(cx.listener(|this, _: &Disconnect, window, cx| {
                 if let Location::Remote(id) = this.panes[this.active].location.clone() {
-                    this.disconnect(&id, cx);
+                    this.request_disconnect(&id, window, cx);
                 }
             }))
+            .on_action(cx.listener(|this, _: &NewTab, window, cx| {
+                let ix = this.active;
+                this.new_tab(ix, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
+                let ix = this.active;
+                let front = this.panes[ix].front();
+                if this.modal.is_none() && this.host_questions.is_empty() {
+                    this.close_tab(ix, front, window, cx);
+                    if this.modal.is_none() {
+                        this.focus_pane(ix, window, cx);
+                    }
+                }
+            }))
+            .on_action(cx.listener(|this, _: &NextTab, window, cx| this.cycle_tab(1, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &PreviousTab, window, cx| this.cycle_tab(-1, window, cx)),
+            )
             .child(self.render_titlebar(t, cx))
             .child(div().flex_1().min_h_0().child(body))
             .child(self.render_status(t))
@@ -465,7 +484,7 @@ impl Workspace {
                     ),
             )
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.open_favorite(index, cx);
+                this.open_favorite(index, window, cx);
                 let ix = this.active;
                 this.focus_pane(ix, window, cx);
             }))
@@ -488,14 +507,16 @@ impl Workspace {
             let current = active.location == Location::Remote(id.clone());
             let status = match self.conns.get(&id) {
                 None => Status::Idle,
-                Some(Conn::Connecting) => Status::Connecting,
+                Some(Conn::Connecting(_)) => Status::Connecting,
                 Some(Conn::Connected(_)) => Status::Connected,
                 Some(Conn::Failed) => Status::Failed,
             };
-            let connected = matches!(status, Status::Connected);
+            let open = !matches!(status, Status::Idle);
             let tint = site.color.as_deref().and_then(SiteColor::from_slug);
             let group: SharedString = format!("site-{id}").into();
             let (open_id, edit_id, eject_id) = (id.clone(), id.clone(), id.clone());
+            let menu_id = id.clone();
+            let weak = cx.entity().downgrade();
             place(
                 format!("site-{id}").into(),
                 icons::SERVER,
@@ -525,32 +546,34 @@ impl Workspace {
                                 this.open_form(Some(edit_id.clone()), window, cx);
                             },
                         )),
-                    )
-                    .when(connected, |actions| {
-                        actions.child(
-                            ui::icon_button(
-                                SharedString::from(format!("eject-{eject_id}")),
-                                icons::DISCONNECT,
-                                Tone::Quiet,
-                                Control::Inline,
-                                t,
-                            )
-                            .tooltip("Disconnect")
-                            .on_click(cx.listener(
-                                move |this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.disconnect(&eject_id, cx);
-                                },
-                            )),
-                        )
-                    }),
+                    ),
             )
+            // Not behind the hover: an open connection should show how to end it.
+            .when(open, |row| {
+                row.child(
+                    ui::icon_button(
+                        SharedString::from(format!("eject-{eject_id}")),
+                        icons::DISCONNECT,
+                        Tone::Quiet,
+                        Control::Inline,
+                        t,
+                    )
+                    .tooltip("Disconnect")
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.request_disconnect(&eject_id, window, cx);
+                    })),
+                )
+            })
             .child(ui::status_dot(t, status))
             .on_click(cx.listener(move |this, _, window, cx| {
                 let ix = this.active;
-                this.open_site(open_id.clone(), ix, cx);
+                this.open_site(open_id.clone(), ix, window, cx);
                 this.focus_pane(ix, window, cx);
             }))
+            .context_menu(move |menu, _, _| {
+                site_menu(menu, menu_id.clone(), open, weak.clone())
+            })
             .into_any_element()
         });
         let sites: Vec<AnyElement> = sites.collect();
@@ -697,9 +720,150 @@ impl Workspace {
                     style.bg(t.selection)
                 }
             })
+            .child(self.render_tab_bar(ix, t, cx))
             .child(self.render_pane_header(ix, t, window, cx))
             .child(div().flex_1().min_h_0().child(self.render_pane_body(ix, t, cx)))
             .into_any_element()
+    }
+
+    /// The pane's tabs: where each one is, a × on it, and a + after them.
+    fn render_tab_bar(&self, ix: usize, t: Theme, cx: &mut Context<Self>) -> impl IntoElement {
+        let pane = &self.panes[ix];
+        let front = pane.front();
+        let tabs: Vec<AnyElement> = (0..pane.tabs.len())
+            .map(|tab| {
+                let location = pane.tab_location(tab);
+                let selected = tab == front;
+                let (glyph, tint, label, status) = match location {
+                    Location::Local => (
+                        icons::COMPUTER,
+                        t.text_muted,
+                        super::favorite_name(pane.tab_path(tab)),
+                        None,
+                    ),
+                    Location::Remote(id) => (
+                        icons::SERVER,
+                        self.site_color(location)
+                            .map(|c| c.swatch())
+                            .unwrap_or(t.text_muted),
+                        self.location_label(location),
+                        match self.conns.get(id) {
+                            Some(Conn::Connected(_)) => None,
+                            Some(Conn::Connecting(_)) => Some(Status::Connecting),
+                            Some(Conn::Failed) => Some(Status::Failed),
+                            None => Some(Status::Idle),
+                        },
+                    ),
+                };
+                let group: SharedString = format!("tab-{ix}-{tab}").into();
+                let site = match location {
+                    Location::Remote(id) => Some(id.clone()),
+                    Location::Local => None,
+                };
+                let several = pane.tabs.len() > 1;
+                let weak = cx.entity().downgrade();
+                div()
+                    .id(group.clone())
+                    .group(group.clone())
+                    .flex()
+                    .items_center()
+                    .gap(px(layout::SPACE_XS))
+                    .flex_shrink_0()
+                    .min_w(px(layout::TAB_MIN_WIDTH))
+                    .max_w(px(layout::TAB_MAX_WIDTH))
+                    .h(px(layout::CONTROL_HEIGHT_COMPACT))
+                    .pl(px(layout::SPACE_SM))
+                    .pr(px(layout::SPACE_XS / 2.))
+                    .rounded(px(layout::RADIUS_CONTROL))
+                    .cursor_pointer()
+                    .text_size(px(layout::TEXT_SM))
+                    .text_color(if selected { t.text } else { t.text_muted })
+                    .when(selected, |chip| chip.bg(t.element_active))
+                    .when(!selected, |chip| {
+                        chip.hover(|style| style.bg(t.element_hover))
+                    })
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.show_tab(ix, tab, window, cx);
+                        this.focus_pane(ix, window, cx);
+                    }))
+                    .child(icon(glyph).size(px(layout::ICON_SIZE)).text_color(tint))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .whitespace_nowrap()
+                            .child(label),
+                    )
+                    .when_some(status, |chip, status| chip.child(ui::status_dot(t, status)))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .when(!selected, |close| {
+                                close
+                                    .opacity(0.)
+                                    .group_hover(group.clone(), |style| style.opacity(1.))
+                            })
+                            .child(
+                                ui::icon_button(
+                                    SharedString::from(format!("close-tab-{ix}-{tab}")),
+                                    icons::CLOSE,
+                                    Tone::Quiet,
+                                    Control::Inline,
+                                    t,
+                                )
+                                .tooltip("Close Tab")
+                                .on_click(cx.listener(
+                                    move |this, _, window, cx| {
+                                        cx.stop_propagation();
+                                        this.close_tab(ix, tab, window, cx);
+                                        if this.modal.is_none() {
+                                            this.focus_pane(ix, window, cx);
+                                        }
+                                    },
+                                )),
+                            ),
+                    )
+                    .context_menu(move |menu, _, _| {
+                        tab_menu(menu, ix, tab, several, site.clone(), weak.clone())
+                    })
+                    .into_any_element()
+            })
+            .collect();
+        div()
+            .h(px(layout::TAB_BAR_HEIGHT))
+            .flex_shrink_0()
+            .flex()
+            .items_center()
+            .gap(px(layout::SPACE_XS))
+            .px(px(layout::SPACE_XS))
+            .border_b_1()
+            .border_color(t.border)
+            .child(
+                div()
+                    .id(("tabs", ix))
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(layout::SPACE_XS / 2.))
+                    .overflow_x_scroll()
+                    .children(tabs),
+            )
+            .child(
+                div().flex_shrink_0().child(
+                    ui::icon_button(
+                        ("new-tab", ix),
+                        icons::PLUS,
+                        Tone::Quiet,
+                        Control::Inline,
+                        t,
+                    )
+                    .tooltip("New Tab")
+                    .on_click(cx.listener(move |this, _, window, cx| this.new_tab(ix, window, cx))),
+                ),
+            )
     }
 
     /// The listing, with the folder tree beside it when that is on.
@@ -1392,7 +1556,7 @@ impl Workspace {
             Location::Local => Status::Connected,
             Location::Remote(id) => match self.conns.get(id) {
                 Some(Conn::Connected(_)) => Status::Connected,
-                Some(Conn::Connecting) => Status::Connecting,
+                Some(Conn::Connecting(_)) => Status::Connecting,
                 Some(Conn::Failed) => Status::Failed,
                 None => Status::Idle,
             },
@@ -1524,7 +1688,7 @@ impl Workspace {
                 .into_any_element()
         } else {
             match self.modal.as_ref()? {
-                Modal::Site(form) => self.render_form(form, t, cx),
+                Modal::Site(form) => self.render_form(form, t, window, cx),
                 Modal::Settings => self.render_settings(t, window, cx),
                 Modal::NewFolder { input, .. } => ui::dialog(t)
                     .mt(px(120.))
@@ -1582,6 +1746,39 @@ impl Workspace {
                             ui::button("do-delete", "Delete", Tone::Danger, Control::Standard, t)
                                 .on_click(cx.listener(|this, _, window, cx| this.confirm_modal(window, cx)))
                                 .into_any_element(),
+                        ))
+                        .into_any_element()
+                }
+                Modal::CloseHost { site, .. } => {
+                    let name = self
+                        .site(site)
+                        .map(|site| site.name.clone())
+                        .unwrap_or_default();
+                    ui::dialog(t)
+                        .track_focus(&self.focus)
+                        .mt(px(120.))
+                        .child(dialog_title(
+                            t,
+                            icons::DISCONNECT,
+                            &format!("Disconnect from {name}?"),
+                        ))
+                        .child(dialog_text(
+                            t,
+                            "Transfers with this server are still running. They fail if it is disconnected now.".to_string(),
+                        ))
+                        .child(dialog_buttons(
+                            t,
+                            cx,
+                            "Cancel",
+                            ui::button(
+                                "do-close-host",
+                                "Disconnect",
+                                Tone::Danger,
+                                Control::Standard,
+                                t,
+                            )
+                            .on_click(cx.listener(|this, _, window, cx| this.confirm_modal(window, cx)))
+                            .into_any_element(),
                         ))
                         .into_any_element()
                 }
@@ -1688,6 +1885,134 @@ impl Workspace {
                 .child(card)
                 .into_any_element(),
         )
+    }
+}
+
+type SiteAction = fn(&mut Workspace, &str, &mut Window, &mut Context<Workspace>);
+type TabAction = fn(&mut Workspace, usize, usize, &mut Window, &mut Context<Workspace>);
+
+fn site_item(
+    label: &'static str,
+    glyph: &'static str,
+    id: &str,
+    weak: &WeakEntity<Workspace>,
+    run: SiteAction,
+) -> PopupMenuItem {
+    let (id, weak) = (id.to_string(), weak.clone());
+    PopupMenuItem::new(label)
+        .icon(icon(glyph))
+        .on_click(move |_, window, cx| {
+            let _ = weak.update(cx, |this, cx| run(this, &id, window, cx));
+        })
+}
+
+fn edit_site(this: &mut Workspace, id: &str, window: &mut Window, cx: &mut Context<Workspace>) {
+    this.open_form(Some(id.to_string()), window, cx);
+}
+
+fn disconnect_site(
+    this: &mut Workspace,
+    id: &str,
+    window: &mut Window,
+    cx: &mut Context<Workspace>,
+) {
+    this.request_disconnect(id, window, cx);
+}
+
+/// What a right click on a site offers.
+fn site_menu(menu: PopupMenu, id: String, open: bool, weak: WeakEntity<Workspace>) -> PopupMenu {
+    menu.item(site_item(
+        "Open",
+        icons::FOLDER_OPEN,
+        &id,
+        &weak,
+        |this, id, window, cx| {
+            let ix = this.active;
+            this.open_site(id.to_string(), ix, window, cx);
+            this.focus_pane(ix, window, cx);
+        },
+    ))
+    .item(site_item(
+        "Open in Other Pane",
+        icons::SWAP,
+        &id,
+        &weak,
+        |this, id, window, cx| {
+            let ix = 1 - this.active;
+            this.open_site(id.to_string(), ix, window, cx);
+            this.focus_pane(ix, window, cx);
+        },
+    ))
+    .separator()
+    .item(site_item("Edit Site…", icons::RENAME, &id, &weak, edit_site))
+    .when(open, |menu| {
+        menu.item(site_item(
+            "Disconnect",
+            icons::DISCONNECT,
+            &id,
+            &weak,
+            disconnect_site,
+        ))
+    })
+}
+
+/// What a right click on a tab offers, with the site's own items on a tab
+/// that is on a site.
+fn tab_menu(
+    menu: PopupMenu,
+    ix: usize,
+    tab: usize,
+    several: bool,
+    site: Option<String>,
+    weak: WeakEntity<Workspace>,
+) -> PopupMenu {
+    let item = |label: &'static str, glyph: &'static str, run: TabAction| {
+        let weak = weak.clone();
+        PopupMenuItem::new(label)
+            .icon(icon(glyph))
+            .on_click(move |_, window, cx| {
+                let _ = weak.update(cx, |this, cx| run(this, ix, tab, window, cx));
+            })
+    };
+    let menu = menu
+        .item(item(
+            "Duplicate Tab",
+            icons::COPY,
+            |this, ix, tab, window, cx| {
+                this.duplicate_tab(ix, tab, window, cx);
+                this.focus_pane(ix, window, cx);
+            },
+        ))
+        .separator()
+        .item(item(
+            "Close Tab",
+            icons::CLOSE,
+            |this, ix, tab, window, cx| {
+                this.close_tab(ix, tab, window, cx);
+                if this.modal.is_none() {
+                    this.focus_pane(ix, window, cx);
+                }
+            },
+        ))
+        .when(several, |menu| {
+            menu.item(item(
+                "Close Other Tabs",
+                icons::CLOSE,
+                |this, ix, tab, window, cx| this.close_other_tabs(ix, tab, window, cx),
+            ))
+        });
+    match site {
+        Some(id) => menu
+            .separator()
+            .item(site_item("Edit Site…", icons::RENAME, &id, &weak, edit_site))
+            .item(site_item(
+                "Disconnect",
+                icons::DISCONNECT,
+                &id,
+                &weak,
+                disconnect_site,
+            )),
+        None => menu,
     }
 }
 

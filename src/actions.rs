@@ -39,6 +39,10 @@ actions!(
         Dismiss,
         Confirm,
         Disconnect,
+        NewTab,
+        CloseTab,
+        NextTab,
+        PreviousTab,
     ]
 );
 
@@ -87,5 +91,9 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new("escape", Dismiss, modal),
         KeyBinding::new("cmd-enter", Confirm, modal),
         KeyBinding::new("cmd-shift-d", Disconnect, None),
+        KeyBinding::new("cmd-t", NewTab, None),
+        KeyBinding::new("cmd-w", CloseTab, None),
+        KeyBinding::new("ctrl-tab", NextTab, None),
+        KeyBinding::new("ctrl-shift-tab", PreviousTab, None),
     ]
 }

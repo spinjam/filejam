@@ -7,6 +7,7 @@ mod import;
 mod pane;
 mod render;
 mod settings;
+mod tabs;
 mod tree;
 
 use std::{
@@ -37,7 +38,8 @@ pub use import::ImportPlan;
 pub use pane::{Location, Pane};
 
 pub enum Conn {
-    Connecting,
+    /// With what stops the attempt, should every tab on the site close.
+    Connecting(tokio::task::AbortHandle),
     Connected(Remote),
     Failed,
 }
@@ -61,6 +63,8 @@ pub struct TransferRow {
     pub direction: Direction,
     pub progress: Arc<Progress>,
     pub state: TransferState,
+    /// The sites it reads from or writes to: closing one stops it.
+    pub sites: Vec<String>,
 }
 
 pub enum Modal {
@@ -83,6 +87,12 @@ pub enum Modal {
         from: usize,
         items: Vec<Entry>,
         clashes: Vec<String>,
+    },
+    /// Closing a site that still has transfers running. `tab` is the tab
+    /// being closed, or `None` for a disconnect.
+    CloseHost {
+        site: String,
+        tab: Option<(usize, usize)>,
     },
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Import(ImportPlan),
@@ -302,6 +312,12 @@ impl Workspace {
         pane.loading = true;
         cx.notify();
         let Some(side) = side else {
+            // Still connecting: the tab is listed once it has.
+            if let Location::Remote(id) = &pane.location
+                && matches!(self.conns.get(id), Some(Conn::Connecting(_)))
+            {
+                return;
+            }
             pane.loading = false;
             pane.error = Some("Not connected.".into());
             pane.entries.clear();
@@ -662,14 +678,14 @@ impl Workspace {
     }
 
     /// Open a favorite in the active pane, connecting to its site first.
-    pub fn open_favorite(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub fn open_favorite(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         let Some(favorite) = self.stored.favorites.get(index).cloned() else {
             return;
         };
         let ix = self.active;
         match favorite.site {
             None => self.navigate(ix, Location::Local, favorite.path, cx),
-            Some(id) => self.open_site_at(id, ix, Some(favorite.path), cx),
+            Some(id) => self.open_site_at(id, ix, Some(favorite.path), window, cx),
         }
     }
 
@@ -706,37 +722,56 @@ impl Workspace {
     // --- sites ----------------------------------------------------------------
 
     /// Open a site in a pane, connecting first if it is not connected.
-    pub fn open_site(&mut self, id: String, ix: usize, cx: &mut Context<Self>) {
-        self.open_site_at(id, ix, None, cx);
+    pub fn open_site(
+        &mut self,
+        id: String,
+        ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_site_at(id, ix, None, window, cx);
     }
 
-    /// Open a site at `at`, or where the site says to start when `None`.
+    /// Open a site at `at`, or where the site says to start when `None`: in
+    /// the pane's tab on that site if it has one, or in a new one. A tab on a
+    /// site still connecting waits there, and can be closed to give up.
     pub fn open_site_at(
         &mut self,
         id: String,
         ix: usize,
         at: Option<String>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(site) = self.site(&id).cloned() else {
             return;
         };
-        match self.conns.get(&id) {
-            Some(Conn::Connected(remote)) if !remote.is_closed() => {
-                let path = at
-                    .or_else(|| site.remote_path.clone())
-                    .unwrap_or_else(|| remote.home.clone());
-                self.navigate(ix, Location::Remote(id), path, cx);
-                return;
+        let location = Location::Remote(id.clone());
+        let existing = self.panes[ix].tab_of(&location);
+        if let Some(Conn::Connected(remote)) = self.conns.get(&id)
+            && !remote.is_closed()
+        {
+            let home = remote.home.clone();
+            match (existing, at) {
+                (Some(tab), None) => self.show_tab(ix, tab, window, cx),
+                (Some(tab), Some(at)) => {
+                    self.show_tab(ix, tab, window, cx);
+                    self.navigate(ix, location, at, cx);
+                }
+                (None, at) => {
+                    let path = at.or(site.remote_path).unwrap_or(home);
+                    self.open_tab(ix, location, path, window, cx);
+                }
             }
-            Some(Conn::Connecting) => return,
-            _ => {}
+            return;
         }
-        self.conns.insert(id.clone(), Conn::Connecting);
-        self.set_status(format!("Connecting to {}…", site.address()), false);
-        cx.notify();
-        let asker = self.asker.clone();
-        let task = runtime().spawn(async move {
+        let already_connecting = matches!(self.conns.get(&id), Some(Conn::Connecting(_)));
+        let opening_favorite = at.is_some();
+        let address = site.address();
+        let attempt = (!already_connecting).then(|| {
+            let asker = self.asker.clone();
+            let site = site.clone();
+            runtime().spawn(async move {
             let site_id = site.id.clone();
             let credentials = tokio::task::spawn_blocking(move || Credentials {
                 password: store::secret(&site_id, Secret::Password).ok().flatten(),
@@ -745,32 +780,102 @@ impl Workspace {
             .await
             .unwrap_or_default();
             Remote::connect(site, credentials, asker).await
+            })
         });
+        if let Some(task) = &attempt {
+            self.conns
+                .insert(id.clone(), Conn::Connecting(task.abort_handle()));
+            self.set_status(format!("Connecting to {address}…"), false);
+        }
+        match existing {
+            Some(tab) => {
+                self.show_tab(ix, tab, window, cx);
+                let pane = &mut self.panes[ix];
+                if let Some(at) = at {
+                    pane.path = at;
+                }
+                pane.error = None;
+                pane.loading = true;
+            }
+            None => self.open_tab(ix, location, at.unwrap_or_default(), window, cx),
+        }
+        self.panes[ix].loading = true;
+        cx.notify();
+        let Some(task) = attempt else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
-            let connected = task.await.unwrap_or_else(|error| Err(error.to_string()));
+            let connected = match task.await {
+                Ok(connected) => Some(connected),
+                Err(error) if error.is_cancelled() => None,
+                Err(error) => Some(Err(error.to_string())),
+            };
             this.update(cx, |this, cx| {
-                let Some(site) = this.site(&id).cloned() else {
+                // Given up on while it was connecting.
+                let Some(connected) = connected else {
                     return;
                 };
+                let wanted = matches!(this.conns.get(&id), Some(Conn::Connecting(_)));
+                let site = this.site(&id).cloned();
+                let (true, Some(site)) = (wanted, site) else {
+                    if let Ok(remote) = connected {
+                        runtime().spawn(async move { remote.disconnect().await });
+                    }
+                    return;
+                };
+                let location = Location::Remote(id.clone());
                 match connected {
                     Ok(remote) => {
-                        let opening_favorite = at.is_some();
-                        let path = at
-                            .or_else(|| site.remote_path.clone())
+                        let start = site
+                            .remote_path
+                            .clone()
                             .unwrap_or_else(|| remote.home.clone());
                         this.conns.insert(id.clone(), Conn::Connected(remote));
                         this.set_status(format!("Connected to {}", site.address()), false);
-                        this.navigate(ix, Location::Remote(id), path, cx);
-                        // A favorite asks for one folder: the other pane stays put.
+                        // Every tab waiting on the site, in either pane.
+                        for ix in 0..2 {
+                            let pane = &mut this.panes[ix];
+                            for tab in pane.tabs.iter_mut().flatten() {
+                                if tab.location == location && tab.path.is_empty() {
+                                    tab.path = start.clone();
+                                }
+                            }
+                            if pane.location == location {
+                                if pane.path.is_empty() {
+                                    pane.path = start.clone();
+                                }
+                                pane.error = None;
+                                this.load(ix, cx);
+                            }
+                        }
+                        // A favorite asks for one folder, and a tab on another
+                        // site is not ours to take over: the other pane stays.
                         if let Some(local) = site
                             .local_path
                             .filter(|p| !p.trim().is_empty() && !opening_favorite)
+                            && this.panes[1 - ix].location == Location::Local
                         {
                             this.navigate(1 - ix, Location::Local, local, cx);
                         }
                     }
                     Err(error) => {
                         this.conns.insert(id, Conn::Failed);
+                        let show_hidden = this.stored.settings.show_hidden;
+                        for pane in &mut this.panes {
+                            for tab in pane.tabs.iter_mut().flatten() {
+                                if tab.location == location {
+                                    tab.loading = false;
+                                    tab.error = Some(error.clone());
+                                }
+                            }
+                            if pane.location == location {
+                                pane.generation += 1;
+                                pane.loading = false;
+                                pane.error = Some(error.clone());
+                                pane.entries.clear();
+                                pane.rebuild(show_hidden, cx);
+                            }
+                        }
                         this.set_status(error, true);
                     }
                 }
@@ -780,14 +885,50 @@ impl Workspace {
         .detach();
     }
 
-    pub fn disconnect(&mut self, id: &str, cx: &mut Context<Self>) {
-        if let Some(Conn::Connected(remote)) = self.conns.remove(id) {
-            runtime().spawn(async move { remote.disconnect().await });
+    /// Whatever state a site's connection is in, end it.
+    fn end_connection(&mut self, id: &str) {
+        match self.conns.remove(id) {
+            Some(Conn::Connected(remote)) => {
+                runtime().spawn(async move { remote.disconnect().await });
+            }
+            Some(Conn::Connecting(attempt)) => attempt.abort(),
+            Some(Conn::Failed) | None => {}
         }
-        let home = fs::home().to_string_lossy().into_owned();
+    }
+
+    pub fn has_running_transfer(&self, id: &str) -> bool {
+        self.transfers.iter().any(|row| {
+            matches!(row.state, TransferState::Running) && row.sites.iter().any(|s| s == id)
+        })
+    }
+
+    /// Disconnect at the user's asking: first, if it would stop a transfer,
+    /// ask them again.
+    pub fn request_disconnect(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.modal.is_some() || !self.host_questions.is_empty() {
+            return;
+        }
+        if self.has_running_transfer(id) {
+            self.modal = Some(Modal::CloseHost {
+                site: id.to_string(),
+                tab: None,
+            });
+            window.focus(&self.focus, cx);
+            cx.notify();
+        } else {
+            self.disconnect(id, window, cx);
+        }
+    }
+
+    /// End a site's connection and close every tab on it, in both panes.
+    pub fn disconnect(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_connection(id);
+        let site = Location::Remote(id.to_string());
         for ix in 0..2 {
-            if self.panes[ix].location == Location::Remote(id.to_string()) {
-                self.navigate(ix, Location::Local, home.clone(), cx);
+            for tab in (0..self.panes[ix].tabs.len()).rev() {
+                if *self.panes[ix].tab_location(tab) == site {
+                    self.remove_tab(ix, tab, window, cx);
+                }
             }
         }
         if let Some(site) = self.site(id) {
@@ -815,8 +956,8 @@ impl Workspace {
         store::save(&self.stored)
     }
 
-    pub fn remove_site(&mut self, id: &str, cx: &mut Context<Self>) {
-        self.disconnect(id, cx);
+    pub fn remove_site(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.disconnect(id, window, cx);
         self.stored.sites.retain(|site| site.id != id);
         self.stored
             .favorites
@@ -879,6 +1020,13 @@ impl Workspace {
         };
         let to_dir = self.panes[to].path.clone();
         let to_location = self.panes[to].location.clone();
+        let sites = [from, to]
+            .into_iter()
+            .filter_map(|ix| match &self.panes[ix].location {
+                Location::Remote(id) => Some(id.clone()),
+                Location::Local => None,
+            })
+            .collect();
         let label = match items.as_slice() {
             [one] => format!("{} → {}", one.name, fs::file_name(&to_dir)),
             many => format!("{} items → {}", many.len(), fs::file_name(&to_dir)),
@@ -902,6 +1050,7 @@ impl Workspace {
             direction,
             progress: progress.clone(),
             state: TransferState::Running,
+            sites,
         });
         self.transfers_visible = true;
         let task = runtime().spawn(transfer::run(job, progress));
@@ -1089,6 +1238,10 @@ impl Workspace {
                 cx,
             ),
             Modal::Replace { from, items, .. } => self.start_transfer(from, items, cx),
+            Modal::CloseHost { site, tab } => match tab {
+                Some((ix, tab)) => self.close_tab_now(ix, tab, window, cx),
+                None => self.disconnect(&site, window, cx),
+            },
             Modal::Import(plan) => self.apply_import(plan, cx),
         }
         if self.modal.is_none() {
