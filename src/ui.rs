@@ -146,6 +146,12 @@ pub fn raised_card<E: Styled>(card: E, t: Theme) -> E {
     }
 }
 
+/// The tallest a floating card can be with its top `top` below the window's and
+/// a margin left under it, so nothing at its foot falls off the window.
+pub fn card_max_height(window: &gpui::Window, top: f32) -> gpui::Pixels {
+    window.viewport_size().height - px(top + layout::SPACE_LG)
+}
+
 /// The dim over the window behind a modal, which also centres it.
 pub fn scrim(t: Theme) -> Div {
     div()

@@ -1477,7 +1477,7 @@ impl Workspace {
     fn render_modal(
         &self,
         t: Theme,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let card = if let Some(question) = self.host_questions.front() {
@@ -1525,7 +1525,7 @@ impl Workspace {
         } else {
             match self.modal.as_ref()? {
                 Modal::Site(form) => self.render_form(form, t, cx),
-                Modal::Settings => self.render_settings(t, cx),
+                Modal::Settings => self.render_settings(t, window, cx),
                 Modal::NewFolder { input, .. } => ui::dialog(t)
                     .mt(px(120.))
                     .child(dialog_title(t, icons::NEW_FOLDER, "New Folder"))

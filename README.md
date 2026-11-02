@@ -30,7 +30,8 @@ cargo run --release  # optimised
 - New folder, rename, recursive delete (with confirmation), a filter,
   sorting by name, size, date or kind, hidden files, a breadcrumb (double
   click it to type a path, `~` works) and back/forward history.
-- Themes: Black, Dark, Dark Glass, Light, Light Glass.
+- Themes: Filejam Black, Dark and Light, Gruvbox, Catppuccin, GitHub, Tokyo
+  Night, Dracula and One, each dark and light, all but Black also as glass.
 
 Sites are saved in `sites.toml` in the platform config directory
 (`~/Library/Application Support/filejam` on macOS). Passwords and

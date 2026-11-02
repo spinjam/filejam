@@ -21,7 +21,13 @@ impl Workspace {
         cx.notify();
     }
 
-    pub(super) fn render_settings(&self, t: Theme, cx: &mut Context<Self>) -> AnyElement {
+    pub(super) fn render_settings(
+        &self,
+        t: Theme,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let top = layout::FORM_TOP + layout::SPACE_LG;
         let chosen = self.stored.settings.theme.as_deref();
 
         let system = theme_card(
@@ -72,6 +78,7 @@ impl Workspace {
         );
 
         let header = div()
+            .flex_shrink_0()
             .flex()
             .items_center()
             .gap(px(layout::SPACE_SM))
@@ -87,16 +94,29 @@ impl Workspace {
                     .child("Settings"),
             );
 
+        // The themes run far past a short window, so they scroll between a
+        // header and a Done that stay put, under the one switch they would
+        // otherwise bury.
+        let body = div()
+            .id("settings-body")
+            .min_h_0()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col()
+            .gap(px(layout::FORM_SECTION_GAP))
+            .child(section(t, "Files", files))
+            .child(section(t, "Theme", appearance));
+
         ui::dialog(t)
             .track_focus(&self.focus)
             .w(px(layout::SETTINGS_WIDTH))
-            .mt(px(layout::FORM_TOP + layout::SPACE_LG))
+            .mt(px(top))
+            .max_h(ui::card_max_height(window, top))
             .gap(px(layout::FORM_SECTION_GAP))
             .child(header)
-            .child(section(t, "Theme", appearance))
-            .child(section(t, "Files", files))
+            .child(body)
             .child(
-                div().flex().justify_end().child(
+                div().flex_shrink_0().flex().justify_end().child(
                     ui::accent_button("settings-done", "Done", t, cx).on_click(
                         cx.listener(|this, _, window, cx| this.dismiss_modal(window, cx)),
                     ),
@@ -108,6 +128,7 @@ impl Workspace {
 
 fn section(t: Theme, label: &str, body: impl IntoElement) -> impl IntoElement {
     div()
+        .flex_shrink_0()
         .flex()
         .flex_col()
         .gap(px(layout::SPACE_SM))
