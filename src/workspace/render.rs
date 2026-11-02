@@ -74,6 +74,7 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleTree, _, cx| this.toggle_tree(this.active, cx)))
             .on_action(cx.listener(|this, _: &AddToFavorites, _, cx| this.favorite_from_pane(cx)))
+            .on_action(cx.listener(|this, _: &ImportForklift, _, cx| this.import_forklift(cx)))
             .on_action(cx.listener(|this, _: &ToggleHidden, _, cx| this.toggle_hidden(cx)))
             .on_action(cx.listener(|this, _: &CycleTheme, window, cx| this.cycle_theme(window, cx)))
             .on_action(
@@ -1575,6 +1576,73 @@ impl Workspace {
                             "Cancel",
                             ui::button("do-delete", "Delete", Tone::Danger, Control::Standard, t)
                                 .on_click(cx.listener(|this, _, window, cx| this.confirm_modal(window, cx)))
+                                .into_any_element(),
+                        ))
+                        .into_any_element()
+                }
+                Modal::Import(plan) => {
+                    let adds = match (plan.sites.len(), plan.folders.len()) {
+                        (0, folders) => super::import::count(folders, "local folder"),
+                        (sites, 0) => super::import::count(sites, "site"),
+                        (sites, folders) => format!(
+                            "{} and {}",
+                            super::import::count(sites, "site"),
+                            super::import::count(folders, "local folder")
+                        ),
+                    };
+                    let mut lines = vec![format!(
+                        "{adds} will be added to filejam{}.",
+                        if plan.folders.is_empty() { "" } else { " (folders go to Favorites)" }
+                    )];
+                    match plan.existing {
+                        0 => {}
+                        1 => lines.push(
+                            "1 server is already here (same host, user and port) and is left as it is."
+                                .into(),
+                        ),
+                        n => lines.push(format!(
+                            "{n} servers are already here (same host, user and port) and are left as they are."
+                        )),
+                    }
+                    match plan.unsupported {
+                        0 => {}
+                        1 => lines.push("1 favorite is not SFTP (FTP, S3, WebDAV…) and is skipped.".into()),
+                        n => lines.push(format!(
+                            "{n} favorites are not SFTP (FTP, S3, WebDAV…) and are skipped."
+                        )),
+                    }
+                    lines.push(
+                        "Passwords stay in ForkLift: sites sign in with your SSH agent or keys. \
+                         Add a password with Edit Site where one is needed."
+                            .into(),
+                    );
+                    let names: Vec<String> = plan.sites.iter().map(|s| s.name.clone()).collect();
+                    ui::dialog(t)
+                        .mt(px(120.))
+                        .child(dialog_title(t, icons::SERVER, "Import from ForkLift"))
+                        .children(lines.into_iter().map(|line| dialog_text(t, line)))
+                        .when(!names.is_empty(), |card| {
+                            card.child(
+                                div()
+                                    .id("import-names")
+                                    .max_h(px(160.))
+                                    .overflow_y_scroll()
+                                    .p(px(layout::SPACE_SM))
+                                    .rounded(px(layout::RADIUS_CONTROL))
+                                    .bg(t.element_hover)
+                                    .text_size(px(layout::TEXT_SM))
+                                    .text_color(t.text_muted)
+                                    .children(names.into_iter().map(|name| div().child(name))),
+                            )
+                        })
+                        .child(dialog_buttons(
+                            t,
+                            cx,
+                            "Cancel",
+                            ui::accent_button("do-import", "Import", t, cx)
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.confirm_modal(window, cx)
+                                }))
                                 .into_any_element(),
                         ))
                         .into_any_element()

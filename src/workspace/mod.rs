@@ -3,6 +3,7 @@
 //! operation that spans both panes — a copy, a drop — is one method.
 
 mod form;
+mod import;
 mod pane;
 mod render;
 mod settings;
@@ -32,6 +33,7 @@ use crate::{
 };
 
 pub use form::SiteForm;
+pub use import::ImportPlan;
 pub use pane::{Location, Pane};
 
 pub enum Conn {
@@ -82,6 +84,8 @@ pub enum Modal {
         items: Vec<Entry>,
         clashes: Vec<String>,
     },
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Import(ImportPlan),
 }
 
 /// What a drag between the panes carries.
@@ -1040,6 +1044,7 @@ impl Workspace {
                 cx,
             ),
             Modal::Replace { from, items, .. } => self.start_transfer(from, items, cx),
+            Modal::Import(plan) => self.apply_import(plan, cx),
         }
         if self.modal.is_none() {
             let active = self.active;

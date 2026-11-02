@@ -8,6 +8,7 @@ actions!(
     [
         Quit,
         NewSite,
+        ImportForklift,
         ToggleSidebar,
         ToggleTransfers,
         ToggleTree,

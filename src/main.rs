@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod actions;
+#[cfg(target_os = "macos")]
+mod forklift;
 mod fs;
 mod icons;
 mod remote;
@@ -114,6 +116,10 @@ fn menus() -> Vec<Menu> {
                 MenuItem::action("Delete", Delete),
                 MenuItem::separator(),
                 MenuItem::action("Disconnect", Disconnect),
+                #[cfg(target_os = "macos")]
+                MenuItem::separator(),
+                #[cfg(target_os = "macos")]
+                MenuItem::action("Import from ForkLift…", ImportForklift),
             ],
         },
         Menu {

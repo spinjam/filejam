@@ -49,6 +49,10 @@ time = { version = "=0.3.55", default-features = false, features = [
 [target.'cfg(unix)'.dependencies]
 libc = "=0.2.189"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1.10.3"
+rusqlite = { version = "0.41.1", features = ["bundled"] }
+
 [patch.crates-io]
 # Vendored from dbdelve: gpui with a backdrop blur and alpha that composites
 # with `over`, and gpui-component whose popups use that blur. Every change is
