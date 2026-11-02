@@ -59,6 +59,18 @@ pub struct Settings {
     pub theme: Option<String>,
     #[serde(default)]
     pub show_hidden: bool,
+    /// Whether each pane, left and right, shows its folder tree.
+    #[serde(default)]
+    pub folder_tree: [bool; 2],
+}
+
+/// A folder pinned to the sidebar, on this computer or on a saved site.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct Favorite {
+    pub path: String,
+    /// The site it lives on, by id; this computer when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub site: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -67,6 +79,8 @@ pub struct Stored {
     pub settings: Settings,
     #[serde(default)]
     pub sites: Vec<Site>,
+    #[serde(default)]
+    pub favorites: Vec<Favorite>,
 }
 
 /// macOS keeps Application Support, Linux the XDG config directory, Windows
@@ -216,6 +230,7 @@ mod tests {
             settings: Settings {
                 theme: Some("Filejam Dark".into()),
                 show_hidden: true,
+                folder_tree: [true, false],
             },
             sites: vec![Site {
                 id: "web".into(),
@@ -229,6 +244,16 @@ mod tests {
                 use_agent: true,
                 color: Some("blue".into()),
             }],
+            favorites: vec![
+                Favorite {
+                    path: "/Users/me/Projects".into(),
+                    site: None,
+                },
+                Favorite {
+                    path: "/var/www/html".into(),
+                    site: Some("web".into()),
+                },
+            ],
         };
         let text = toml::to_string_pretty(&stored).unwrap();
         assert_eq!(toml::from_str::<Stored>(&text).unwrap(), stored);

@@ -107,6 +107,7 @@ fn menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("New Site…", NewSite),
                 MenuItem::action("New Folder", NewFolder),
+                MenuItem::action("Add to Favorites", AddToFavorites),
                 MenuItem::separator(),
                 MenuItem::action("Copy to Other Pane", CopyToOther),
                 MenuItem::action("Rename", Rename),
@@ -121,6 +122,7 @@ fn menus() -> Vec<Menu> {
             items: vec![
                 MenuItem::action("Toggle Sidebar", ToggleSidebar),
                 MenuItem::action("Toggle Transfers", ToggleTransfers),
+                MenuItem::action("Toggle Folder Tree", ToggleTree),
                 MenuItem::action("Show Hidden Files", ToggleHidden),
                 MenuItem::separator(),
                 MenuItem::action("Refresh", Refresh),

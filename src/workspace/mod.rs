@@ -6,6 +6,7 @@ mod form;
 mod pane;
 mod render;
 mod settings;
+mod tree;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -25,7 +26,7 @@ use tokio::sync::mpsc;
 use crate::{
     fs::{self, Entry, SortKey},
     remote::{Credentials, HostKeyQuestion, Remote, runtime},
-    store::{self, Secret, Site, Stored},
+    store::{self, Favorite, Secret, Site, Stored},
     theme::{self, Theme},
     transfer::{self, Job, Progress, Side},
 };
@@ -123,9 +124,10 @@ impl Workspace {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let stored = store::load();
         let home = fs::home().to_string_lossy().into_owned();
+        let [left_tree, right_tree] = stored.settings.folder_tree;
         let panes = [
-            Pane::new(home.clone(), window, cx),
-            Pane::new(home, window, cx),
+            Pane::new(home.clone(), left_tree, window, cx),
+            Pane::new(home, right_tree, window, cx),
         ];
 
         let (asker, mut questions) = mpsc::unbounded_channel::<HostKeyQuestion>();
@@ -278,6 +280,9 @@ impl Workspace {
             pane.selected.clear();
             pane.cursor = None;
         }
+        if pane.location != location {
+            pane.tree.reset(matches!(location, Location::Remote(_)));
+        }
         pane.location = location;
         pane.path = path;
         self.load(ix, cx);
@@ -299,14 +304,11 @@ impl Workspace {
             pane.rows.clear();
             return;
         };
-        let task = runtime().spawn(async move {
-            match side {
-                Side::Local => tokio::task::spawn_blocking(move || fs::list_local(&path))
-                    .await
-                    .map_err(|error| error.to_string())?,
-                Side::Remote(remote) => remote.list(&path).await,
-            }
-        });
+        if pane.tree.visible {
+            pane.tree.reveal(&path);
+            self.list_tree(ix, cx);
+        }
+        let task = list(side, path.clone());
         cx.spawn(async move |this, cx| {
             let listed = task.await.unwrap_or_else(|error| Err(error.to_string()));
             this.update(cx, |this, cx| {
@@ -319,6 +321,8 @@ impl Workspace {
                 match listed {
                     Ok(entries) => {
                         pane.error = None;
+                        // The tree learns the folder's sub-folders for free.
+                        pane.tree.set_children(&path, &entries);
                         pane.entries = entries;
                     }
                     Err(error) => {
@@ -334,6 +338,64 @@ impl Workspace {
             })
         })
         .detach();
+    }
+
+    /// List, off the UI thread, every open tree folder not listed yet.
+    fn list_tree(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let Some(side) = self.side_of(ix) else {
+            return;
+        };
+        let tree = &mut self.panes[ix].tree;
+        let generation = tree.generation;
+        for path in tree.take_pending() {
+            let task = list(side.clone(), path.clone());
+            cx.spawn(async move |this, cx| {
+                let listed = task.await.unwrap_or_else(|error| Err(error.to_string()));
+                this.update(cx, |this, cx| {
+                    let show_hidden = this.stored.settings.show_hidden;
+                    let pane = &mut this.panes[ix];
+                    if pane.tree.generation != generation {
+                        return;
+                    }
+                    match listed {
+                        Ok(entries) => pane.tree.set_children(&path, &entries),
+                        Err(_) => pane.tree.set_failed(&path),
+                    }
+                    pane.tree.rebuild(&pane.path, show_hidden);
+                    cx.notify();
+                })
+            })
+            .detach();
+        }
+        let show_hidden = self.stored.settings.show_hidden;
+        let pane = &mut self.panes[ix];
+        pane.tree.rebuild(&pane.path, show_hidden);
+    }
+
+    /// Show or hide a pane's folder tree, and remember it.
+    pub fn toggle_tree(&mut self, ix: usize, cx: &mut Context<Self>) {
+        let pane = &mut self.panes[ix];
+        pane.tree.visible = !pane.tree.visible;
+        if pane.tree.visible {
+            let path = pane.path.clone();
+            pane.tree.reveal(&path);
+            self.list_tree(ix, cx);
+        }
+        self.stored.settings.folder_tree[ix] = self.panes[ix].tree.visible;
+        self.persist();
+        cx.notify();
+    }
+
+    /// Open or close one folder in a pane's tree.
+    pub fn toggle_tree_folder(&mut self, ix: usize, path: &str, cx: &mut Context<Self>) {
+        if self.panes[ix].tree.toggle(path) {
+            self.list_tree(ix, cx);
+        } else {
+            let show_hidden = self.stored.settings.show_hidden;
+            let pane = &mut self.panes[ix];
+            pane.tree.rebuild(&pane.path, show_hidden);
+        }
+        cx.notify();
     }
 
     pub fn refresh(&mut self, ix: usize, cx: &mut Context<Self>) {
@@ -520,18 +582,100 @@ impl Workspace {
         }
     }
 
+    // --- favorites ------------------------------------------------------------
+
+    /// Pin a folder to the sidebar.
+    pub fn add_favorite(&mut self, location: Location, path: String, cx: &mut Context<Self>) {
+        let favorite = Favorite {
+            path,
+            site: match location {
+                Location::Local => None,
+                Location::Remote(id) => Some(id),
+            },
+        };
+        let name = favorite_name(&favorite.path);
+        if self.stored.favorites.contains(&favorite) {
+            self.set_status(format!("“{name}” is already in Favorites."), false);
+        } else {
+            self.stored.favorites.push(favorite);
+            self.persist();
+            self.set_status(format!("Added “{name}” to Favorites."), false);
+        }
+        cx.notify();
+    }
+
+    pub fn remove_favorite(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.stored.favorites.len() {
+            self.stored.favorites.remove(index);
+            self.persist();
+            cx.notify();
+        }
+    }
+
+    /// Open a favorite in the active pane, connecting to its site first.
+    pub fn open_favorite(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(favorite) = self.stored.favorites.get(index).cloned() else {
+            return;
+        };
+        let ix = self.active;
+        match favorite.site {
+            None => self.navigate(ix, Location::Local, favorite.path, cx),
+            Some(id) => self.open_site_at(id, ix, Some(favorite.path), cx),
+        }
+    }
+
+    /// Ctrl-Cmd-T: the folder under the cursor, or the folder the pane shows.
+    pub fn favorite_from_pane(&mut self, cx: &mut Context<Self>) {
+        let pane = &self.panes[self.active];
+        let path = match pane.targets().as_slice() {
+            [one] if one.kind.is_dir() => pane.join(&one.name),
+            _ => pane.path.clone(),
+        };
+        let location = pane.location.clone();
+        self.add_favorite(location, path, cx);
+    }
+
+    /// Folders dragged onto the sidebar's Favorites.
+    pub fn drop_favorites(&mut self, dragged: &DraggedFiles, cx: &mut Context<Self>) {
+        let pane = &self.panes[dragged.pane];
+        let location = pane.location.clone();
+        let folders: Vec<String> = dragged
+            .items
+            .iter()
+            .filter(|item| item.kind.is_dir())
+            .map(|item| pane.join(&item.name))
+            .collect();
+        if folders.is_empty() {
+            self.set_status("Only folders can be added to Favorites.", true);
+            cx.notify();
+        }
+        for path in folders {
+            self.add_favorite(location.clone(), path, cx);
+        }
+    }
+
     // --- sites ----------------------------------------------------------------
 
     /// Open a site in a pane, connecting first if it is not connected.
     pub fn open_site(&mut self, id: String, ix: usize, cx: &mut Context<Self>) {
+        self.open_site_at(id, ix, None, cx);
+    }
+
+    /// Open a site at `at`, or where the site says to start when `None`.
+    pub fn open_site_at(
+        &mut self,
+        id: String,
+        ix: usize,
+        at: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(site) = self.site(&id).cloned() else {
             return;
         };
         match self.conns.get(&id) {
             Some(Conn::Connected(remote)) if !remote.is_closed() => {
-                let path = site
-                    .remote_path
-                    .clone()
+                let path = at
+                    .or_else(|| site.remote_path.clone())
                     .unwrap_or_else(|| remote.home.clone());
                 self.navigate(ix, Location::Remote(id), path, cx);
                 return;
@@ -561,14 +705,18 @@ impl Workspace {
                 };
                 match connected {
                     Ok(remote) => {
-                        let path = site
-                            .remote_path
-                            .clone()
+                        let opening_favorite = at.is_some();
+                        let path = at
+                            .or_else(|| site.remote_path.clone())
                             .unwrap_or_else(|| remote.home.clone());
                         this.conns.insert(id.clone(), Conn::Connected(remote));
                         this.set_status(format!("Connected to {}", site.address()), false);
                         this.navigate(ix, Location::Remote(id), path, cx);
-                        if let Some(local) = site.local_path.filter(|p| !p.trim().is_empty()) {
+                        // A favorite asks for one folder: the other pane stays put.
+                        if let Some(local) = site
+                            .local_path
+                            .filter(|p| !p.trim().is_empty() && !opening_favorite)
+                        {
                             this.navigate(1 - ix, Location::Local, local, cx);
                         }
                     }
@@ -621,6 +769,9 @@ impl Workspace {
     pub fn remove_site(&mut self, id: &str, cx: &mut Context<Self>) {
         self.disconnect(id, cx);
         self.stored.sites.retain(|site| site.id != id);
+        self.stored
+            .favorites
+            .retain(|favorite| favorite.site.as_deref() != Some(id));
         store::forget_secrets(id);
         self.persist();
         self.modal = None;
@@ -968,10 +1119,30 @@ impl Workspace {
     }
 }
 
+/// Every entry of a folder on either side, listed on the I/O runtime.
+fn list(side: Side, path: String) -> tokio::task::JoinHandle<Result<Vec<Entry>, String>> {
+    runtime().spawn(async move {
+        match side {
+            Side::Local => tokio::task::spawn_blocking(move || fs::list_local(&path))
+                .await
+                .map_err(|error| error.to_string())?,
+            Side::Remote(remote) => remote.list(&path).await,
+        }
+    })
+}
+
 enum Op {
     Mkdir(String),
     Rename(String, String),
     Delete(Vec<String>),
+}
+
+/// What a favorite is called in the sidebar: its folder's own name.
+pub fn favorite_name(path: &str) -> String {
+    match fs::file_name(path) {
+        name if name.is_empty() => path.to_string(),
+        name => name,
+    }
 }
 
 fn valid_name(name: &str) -> bool {

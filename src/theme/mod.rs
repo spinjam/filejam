@@ -44,6 +44,12 @@ pub mod layout {
     pub const SIDEBAR_DEFAULT_WIDTH: f32 = 220.0;
     pub const SIDEBAR_MIN_WIDTH: f32 = 170.0;
     pub const SIDEBAR_MAX_WIDTH: f32 = 400.0;
+    pub const TREE_DEFAULT_WIDTH: f32 = 200.0;
+    pub const TREE_MIN_WIDTH: f32 = 120.0;
+    pub const TREE_MAX_WIDTH: f32 = 480.0;
+    pub const TREE_ROW_HEIGHT: f32 = 24.0;
+    pub const TREE_INDENT: f32 = 14.0;
+    pub const TREE_CHEVRON_SIZE: f32 = 16.0;
     pub const TRANSFERS_HEIGHT: f32 = 220.0;
 
     pub const SIZE_COLUMN_WIDTH: f32 = 84.0;

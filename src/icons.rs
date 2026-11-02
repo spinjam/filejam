@@ -13,6 +13,8 @@ const ICONS: &[(&str, &IconData)] = &[
     // Asked for by gpui-component's own widgets.
     ("icons/chevron-down.svg", icondata_lu::LuChevronDown),
     ("icons/chevron-right.svg", icondata_lu::LuChevronRight),
+    ("icons/chevron-down.svg", icondata_lu::LuChevronDown),
+    ("icons/folder-tree.svg", icondata_lu::LuFolderTree),
     ("icons/chevron-left.svg", icondata_lu::LuChevronLeft),
     ("icons/chevron-up.svg", icondata_lu::LuChevronUp),
     ("icons/chevrons-up-down.svg", icondata_lu::LuChevronsUpDown),
@@ -80,6 +82,9 @@ const ICONS: &[(&str, &IconData)] = &[
 /// rather than a file.
 pub mod icon {
     pub const CHEVRON_RIGHT: &str = "icons/chevron-right.svg";
+    pub const CHEVRON_DOWN: &str = "icons/chevron-down.svg";
+    pub const FOLDER_TREE: &str = "icons/folder-tree.svg";
+    pub const FOLDER_OPEN: &str = "icons/folder-open.svg";
     pub const CLOSE: &str = "icons/close.svg";
     pub const MINIMIZE: &str = "icons/minus.svg";
     pub const MAXIMIZE: &str = "icons/square.svg";
@@ -175,6 +180,9 @@ mod tests {
         use icon::*;
         for path in [
             CHEVRON_RIGHT,
+            CHEVRON_DOWN,
+            FOLDER_TREE,
+            FOLDER_OPEN,
             CLOSE,
             MINIMIZE,
             MAXIMIZE,

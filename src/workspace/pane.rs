@@ -3,9 +3,11 @@
 use std::collections::HashSet;
 
 use gpui::{App, AppContext, Entity, FocusHandle, UniformListScrollHandle, Window};
-use gpui_component::input::InputState;
+use gpui_component::{input::InputState, resizable::ResizableState};
 
 use crate::fs::{self, Entry, SortKey};
+
+use super::tree::FolderTree;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Location {
@@ -44,10 +46,13 @@ pub struct Pane {
     /// The name to put the cursor on once the next listing lands: the folder
     /// just left by going up, or the one just made.
     pub reveal: Option<String>,
+    /// The folder tree beside the listing, when it is switched on.
+    pub tree: FolderTree,
+    pub tree_split: Entity<ResizableState>,
 }
 
 impl Pane {
-    pub fn new(path: String, window: &mut Window, cx: &mut App) -> Self {
+    pub fn new(path: String, tree: bool, window: &mut Window, cx: &mut App) -> Self {
         Self {
             location: Location::Local,
             path,
@@ -69,6 +74,8 @@ impl Pane {
             focus: cx.focus_handle(),
             generation: 0,
             reveal: None,
+            tree: FolderTree::new(tree),
+            tree_split: cx.new(|_| ResizableState::default()),
         }
     }
 
@@ -133,6 +140,7 @@ impl Pane {
             self.cursor = None;
         }
         self.anchor = self.cursor;
+        self.tree.rebuild(&self.path, show_hidden);
     }
 
     /// What an action acts on: the selection, or the row under the cursor

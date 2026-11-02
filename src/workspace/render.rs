@@ -10,7 +10,8 @@ use gpui::{
     div, prelude::FluentBuilder, px, uniform_list,
 };
 use gpui_component::{
-    Disableable,
+    Disableable, Selectable,
+    menu::{ContextMenuExt, PopupMenuItem},
     input::Input,
     resizable::{h_resizable, resizable_panel},
 };
@@ -71,6 +72,8 @@ impl Render for Workspace {
                 this.transfers_visible = !this.transfers_visible;
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &ToggleTree, _, cx| this.toggle_tree(this.active, cx)))
+            .on_action(cx.listener(|this, _: &AddToFavorites, _, cx| this.favorite_from_pane(cx)))
             .on_action(cx.listener(|this, _: &ToggleHidden, _, cx| this.toggle_hidden(cx)))
             .on_action(cx.listener(|this, _: &CycleTheme, window, cx| this.cycle_theme(window, cx)))
             .on_action(
@@ -396,6 +399,84 @@ impl Workspace {
             .into_any_element()
         });
 
+        let weak = cx.entity().downgrade();
+        let pinned = self.stored.favorites.iter().enumerate().map(|(index, favorite)| {
+            let location = match &favorite.site {
+                None => Location::Local,
+                Some(id) => Location::Remote(id.clone()),
+            };
+            let current = active.location == location && active.path == favorite.path;
+            let tint = self
+                .site_color(&location)
+                .map(|c| c.swatch())
+                .unwrap_or(t.folder);
+            let site_name = favorite
+                .site
+                .as_ref()
+                .map(|id| self.site(id).map(|site| site.name.clone()).unwrap_or_else(|| id.clone()));
+            let group: SharedString = format!("pinned-{index}").into();
+            let weak = weak.clone();
+            place(
+                format!("pinned-{index}").into(),
+                icons::FOLDER,
+                tint,
+                super::favorite_name(&favorite.path),
+                current,
+            )
+            .group(group.clone())
+            .when_some(site_name, |row, name| {
+                row.child(
+                    div()
+                        .flex_shrink_0()
+                        .max_w(px(80.))
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .whitespace_nowrap()
+                        .text_size(px(layout::TEXT_XS))
+                        .text_color(t.text_faint)
+                        .child(name),
+                )
+            })
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .opacity(0.)
+                    .group_hover(group, |style| style.opacity(1.))
+                    .child(
+                        ui::icon_button(
+                            SharedString::from(format!("unpin-{index}")),
+                            icons::CLOSE,
+                            Tone::Quiet,
+                            Control::Inline,
+                            t,
+                        )
+                        .tooltip("Remove from Favorites")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.remove_favorite(index, cx);
+                        })),
+                    ),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| {
+                this.open_favorite(index, cx);
+                let ix = this.active;
+                this.focus_pane(ix, window, cx);
+            }))
+            .context_menu(move |menu, _, _| {
+                let weak = weak.clone();
+                menu.item(
+                    PopupMenuItem::new("Remove from Favorites")
+                        .icon(icon(icons::CLOSE))
+                        .on_click(move |_, _, cx| {
+                            let _ = weak.update(cx, |this, cx| this.remove_favorite(index, cx));
+                        }),
+                )
+            })
+            .into_any_element()
+        });
+        let pinned: Vec<AnyElement> = pinned.collect();
+
         let sites = self.stored.sites.iter().map(|site| {
             let id = site.id.clone();
             let current = active.location == Location::Remote(id.clone());
@@ -484,8 +565,24 @@ impl Workspace {
             .flex()
             .flex_col()
             .pb(px(layout::SPACE_MD))
-            .child(heading("Favorites"))
-            .children(favorites)
+            .child(
+                div()
+                    .id("favorites")
+                    .flex()
+                    .flex_col()
+                    .pb(px(layout::SPACE_XS))
+                    .rounded(px(layout::RADIUS_CONTROL))
+                    .on_drop(cx.listener(|this, dragged: &DraggedFiles, _, cx| {
+                        this.drop_favorites(dragged, cx)
+                    }))
+                    .drag_over::<DraggedFiles>(|style, _, _, cx| {
+                        let t = *theme::theme(cx);
+                        style.bg(t.selection)
+                    })
+                    .child(heading("Favorites"))
+                    .children(favorites)
+                    .children(pinned),
+            )
             .child(
                 div()
                     .flex()
@@ -566,8 +663,6 @@ impl Workspace {
         } else {
             t.panel_glass()
         };
-        let remote = pane.is_remote();
-
         div()
             .id(("pane", ix))
             .track_focus(&pane.focus)
@@ -597,9 +692,167 @@ impl Workspace {
                 }
             })
             .child(self.render_pane_header(ix, t, window, cx))
-            .child(column_headers(ix, pane, remote, t, cx))
-            .child(self.render_listing(ix, t, cx))
+            .child(div().flex_1().min_h_0().child(self.render_pane_body(ix, t, cx)))
             .into_any_element()
+    }
+
+    /// The listing, with the folder tree beside it when that is on.
+    fn render_pane_body(&self, ix: usize, t: Theme, cx: &mut Context<Self>) -> AnyElement {
+        let pane = &self.panes[ix];
+        let listing = div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(column_headers(ix, pane, pane.is_remote(), t, cx))
+            .child(self.render_listing(ix, t, cx))
+            .into_any_element();
+        if !pane.tree.visible {
+            return listing;
+        }
+        h_resizable(("tree-split", ix))
+            .with_state(&pane.tree_split)
+            .child(
+                resizable_panel()
+                    .size(px(layout::TREE_DEFAULT_WIDTH))
+                    .size_range(px(layout::TREE_MIN_WIDTH)..px(layout::TREE_MAX_WIDTH))
+                    .child(self.render_tree(ix, t, cx)),
+            )
+            .child(resizable_panel().child(listing))
+            .into_any_element()
+    }
+
+    fn render_tree(&self, ix: usize, t: Theme, cx: &mut Context<Self>) -> AnyElement {
+        let tree = &self.panes[ix].tree;
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .border_r_1()
+            .border_color(t.border)
+            .child(
+                uniform_list(
+                    ("tree", ix),
+                    tree.rows.len(),
+                    cx.processor(move |this, range: Range<usize>, _window, cx| {
+                        this.render_tree_rows(ix, range, cx)
+                    }),
+                )
+                .track_scroll(&tree.scroll)
+                .flex_1()
+                .py(px(layout::SPACE_XS)),
+            )
+            .into_any_element()
+    }
+
+    fn render_tree_rows(
+        &mut self,
+        ix: usize,
+        range: Range<usize>,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let t = *theme::theme(cx);
+        let pane = &self.panes[ix];
+        let focused = self.active == ix;
+        let remote = pane.is_remote();
+        range
+            .filter_map(|n| {
+                let row = pane.tree.rows.get(n)?;
+                let current = row.path == pane.path;
+                let path = row.path.clone();
+                let toggle_path = row.path.clone();
+                let location = pane.location.clone();
+                let (menu_path, menu_location) = (row.path.clone(), pane.location.clone());
+                let weak = cx.entity().downgrade();
+                let (glyph, tint) = if row.depth == 0 {
+                    (if remote { icons::SERVER } else { icons::DISK }, t.text_muted)
+                } else if row.expanded && !row.leaf {
+                    (icons::FOLDER_OPEN, t.folder)
+                } else {
+                    (icons::FOLDER, t.folder)
+                };
+                let disclosure = if row.leaf {
+                    div().size(px(layout::TREE_CHEVRON_SIZE)).into_any_element()
+                } else {
+                    div()
+                        .id(SharedString::from(format!("tree-toggle-{ix}-{n}")))
+                        .size(px(layout::TREE_CHEVRON_SIZE))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(layout::RADIUS_CONTROL - 2.))
+                        .hover(|style| style.bg(t.element_hover))
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            cx.stop_propagation();
+                            this.toggle_tree_folder(ix, &toggle_path, cx);
+                        }))
+                        .child(
+                            icon(if row.expanded {
+                                icons::CHEVRON_DOWN
+                            } else {
+                                icons::CHEVRON_RIGHT
+                            })
+                            .size(px(12.))
+                            .text_color(if row.loading { t.text_faint } else { t.text_muted }),
+                        )
+                        .into_any_element()
+                };
+                Some(
+                    div()
+                        .id(SharedString::from(format!("tree-{ix}-{n}")))
+                        .h(px(layout::TREE_ROW_HEIGHT))
+                        .mx(px(layout::SPACE_XS))
+                        .pl(px(layout::SPACE_XS + row.depth as f32 * layout::TREE_INDENT))
+                        .pr(px(layout::SPACE_SM))
+                        .flex()
+                        .items_center()
+                        .gap(px(layout::SPACE_XS))
+                        .rounded(px(layout::RADIUS_CONTROL))
+                        .cursor_pointer()
+                        .when(current, |r| {
+                            r.bg(if focused { t.selection } else { t.element_active })
+                        })
+                        .when(!current, |r| r.hover(|style| style.bg(t.element_hover)))
+                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                            if event.click_count() >= 2 {
+                                this.toggle_tree_folder(ix, &path, cx);
+                            } else {
+                                this.navigate(ix, location.clone(), path.clone(), cx);
+                            }
+                            this.focus_pane(ix, window, cx);
+                        }))
+                        .child(disclosure)
+                        .child(icon(glyph).size(px(layout::ICON_SIZE)).text_color(tint))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .whitespace_nowrap()
+                                .text_size(px(layout::TEXT_SM))
+                                .when(row.hidden, |name| name.text_color(t.text_muted))
+                                .when(current, |name| name.font_weight(FontWeight::MEDIUM))
+                                .child(row.name.clone()),
+                        )
+                        .context_menu(move |menu, _, _| {
+                            let weak = weak.clone();
+                            let (location, path) = (menu_location.clone(), menu_path.clone());
+                            menu.item(
+                                PopupMenuItem::new("Add to Favorites")
+                                    .icon(icon(icons::FOLDER))
+                                    .on_click(move |_, _, cx| {
+                                        let (location, path) = (location.clone(), path.clone());
+                                        let _ = weak.update(cx, |this, cx| {
+                                            this.add_favorite(location, path, cx)
+                                        });
+                                    }),
+                            )
+                        })
+                        .into_any_element(),
+                )
+            })
+            .collect()
     }
 
     fn render_pane_header(
@@ -734,6 +987,22 @@ impl Workspace {
             .border_b_1()
             .border_color(t.border)
             .child(
+                ui::icon_button(
+                    ("tree-toggle", ix),
+                    icons::FOLDER_TREE,
+                    Tone::Quiet,
+                    Control::Inline,
+                    t,
+                )
+                .selected(pane.tree.visible)
+                .tooltip(if pane.tree.visible {
+                    "Hide Folder Tree (⌥⌘T)"
+                } else {
+                    "Show Folder Tree (⌥⌘T)"
+                })
+                .on_click(cx.listener(move |this, _, _, cx| this.toggle_tree(ix, cx))),
+            )
+            .child(
                 ui::icon_button(("up", ix), icons::UP, Tone::Quiet, Control::Inline, t)
                     .tooltip("Enclosing Folder (⌘↑)")
                     .disabled(pane.parent().is_none())
@@ -813,6 +1082,10 @@ impl Workspace {
                     vec![entry.clone()]
                 };
                 let (glyph, tint) = file_icon(&entry, t);
+                let weak = cx.entity().downgrade();
+                let folder = entry.kind.is_dir().then(|| pane.join(&entry.name));
+                let here = pane.path.clone();
+                let location = pane.location.clone();
                 let label = match dragged.as_slice() {
                     [one] => one.name.clone(),
                     many => format!("{} items", many.len()),
@@ -903,6 +1176,37 @@ impl Workspace {
                                 .child(entry.mode.map(ui::mode_string).unwrap_or_default())
                         } else {
                             cell(layout::MODE_COLUMN_WIDTH, t.text_muted).child(entry.kind_label())
+                        })
+                        .context_menu(move |menu, _, _| {
+                            let favorite = weak.clone();
+                            let current = weak.clone();
+                            let (folder, here, location) =
+                                (folder.clone(), here.clone(), location.clone());
+                            let here_location = location.clone();
+                            menu.item(
+                                PopupMenuItem::new("Add to Favorites")
+                                    .icon(icon(icons::FOLDER))
+                                    .disabled(folder.is_none())
+                                    .on_click(move |_, _, cx| {
+                                        if let Some(path) = folder.clone() {
+                                            let location = location.clone();
+                                            let _ = favorite.update(cx, |this, cx| {
+                                                this.add_favorite(location, path, cx)
+                                            });
+                                        }
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new("Add Current Folder to Favorites").on_click(
+                                    move |_, _, cx| {
+                                        let (location, path) =
+                                            (here_location.clone(), here.clone());
+                                        let _ = current.update(cx, |this, cx| {
+                                            this.add_favorite(location, path, cx)
+                                        });
+                                    },
+                                ),
+                            )
                         })
                         .into_any_element(),
                 )
