@@ -79,6 +79,31 @@ impl Pane {
         }
     }
 
+    /// Trade everything shown with the other pane: where it is, what it
+    /// lists, what is picked, its history and its tree. The inputs, focus
+    /// and scroll stay with the side, and so does whether the tree is on.
+    pub fn swap_contents(&mut self, other: &mut Pane) {
+        use std::mem::swap;
+        swap(&mut self.location, &mut other.location);
+        swap(&mut self.path, &mut other.path);
+        swap(&mut self.entries, &mut other.entries);
+        swap(&mut self.rows, &mut other.rows);
+        swap(&mut self.selected, &mut other.selected);
+        swap(&mut self.cursor, &mut other.cursor);
+        swap(&mut self.anchor, &mut other.anchor);
+        swap(&mut self.sort, &mut other.sort);
+        swap(&mut self.ascending, &mut other.ascending);
+        swap(&mut self.loading, &mut other.loading);
+        swap(&mut self.error, &mut other.error);
+        swap(&mut self.back, &mut other.back);
+        swap(&mut self.forward, &mut other.forward);
+        swap(&mut self.reveal, &mut other.reveal);
+        swap(&mut self.tree, &mut other.tree);
+        swap(&mut self.tree.visible, &mut other.tree.visible);
+        self.editing_path = false;
+        other.editing_path = false;
+    }
+
     pub fn is_remote(&self) -> bool {
         matches!(self.location, Location::Remote(_))
     }

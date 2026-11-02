@@ -146,6 +146,7 @@ fn menus() -> Vec<Menu> {
                 MenuItem::action("Go to Folder…", GoToPath),
                 MenuItem::separator(),
                 MenuItem::action("Switch Pane", SwitchPane),
+                MenuItem::action("Swap Panes", SwapPanes),
             ],
         },
     ]

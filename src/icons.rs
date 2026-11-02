@@ -63,6 +63,7 @@ const ICONS: &[(&str, &IconData)] = &[
     ("icons/trash.svg", icondata_lu::LuTrash2),
     ("icons/pencil.svg", icondata_lu::LuPencil),
     ("icons/copy.svg", icondata_lu::LuCopy),
+    ("icons/arrow-left-right.svg", icondata_lu::LuArrowLeftRight),
     ("icons/plus.svg", icondata_lu::LuPlus),
     ("icons/panel-left.svg", icondata_lu::LuPanelLeft),
     ("icons/panel-bottom.svg", icondata_lu::LuPanelBottom),
@@ -118,6 +119,7 @@ pub mod icon {
     pub const DELETE: &str = "icons/trash.svg";
     pub const RENAME: &str = "icons/pencil.svg";
     pub const COPY: &str = "icons/copy.svg";
+    pub const SWAP: &str = "icons/arrow-left-right.svg";
     pub const PLUS: &str = "icons/plus.svg";
     pub const SIDEBAR: &str = "icons/panel-left.svg";
     pub const TRANSFERS: &str = "icons/panel-bottom.svg";
@@ -216,6 +218,7 @@ mod tests {
             DELETE,
             RENAME,
             COPY,
+            SWAP,
             PLUS,
             SIDEBAR,
             TRANSFERS,

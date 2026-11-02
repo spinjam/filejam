@@ -66,6 +66,16 @@ impl FolderTree {
         self.follow = true;
     }
 
+    /// Drop every listing in flight: they land under `generation`'s
+    /// predecessor and are ignored, and their folders are listed again.
+    pub fn settle(&mut self, generation: u64) {
+        self.generation = generation;
+        for node in self.nodes.values_mut() {
+            node.loading = false;
+        }
+        self.follow = true;
+    }
+
     pub fn join(&self, dir: &str, name: &str) -> String {
         if self.remote {
             fs::remote_join(dir, name)
@@ -269,6 +279,19 @@ mod tests {
         tree.rebuild("/", false);
         assert_eq!(tree.rows.len(), 2);
         assert!(!tree.toggle("/srv"), "listed already");
+    }
+
+    #[test]
+    fn settling_drops_listings_in_flight_and_asks_again() {
+        let mut tree = FolderTree::new(true);
+        tree.reset(false);
+        tree.reveal("/");
+        assert_eq!(tree.take_pending(), vec!["/".to_string()]);
+        assert!(tree.take_pending().is_empty());
+        let before = tree.generation;
+        tree.settle(before + 5);
+        assert_eq!(tree.generation, before + 5);
+        assert_eq!(tree.take_pending(), vec!["/".to_string()]);
     }
 
     #[test]

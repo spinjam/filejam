@@ -119,6 +119,7 @@ impl Render for Workspace {
                 this.focus_pane(other, window, cx);
             }))
             .on_action(cx.listener(|this, _: &CopyToOther, _, cx| this.copy_to_other(cx)))
+            .on_action(cx.listener(|this, _: &SwapPanes, window, cx| this.swap_panes(window, cx)))
             .on_action(
                 cx.listener(|this, _: &NewFolder, window, cx| this.ask_new_folder(window, cx)),
             )
@@ -277,6 +278,10 @@ impl Workspace {
                 .on_click(cx.listener(|this, _, _, cx| this.ask_delete(cx)))
                 .into_any_element(),
             div().w(px(1.)).h(px(16.)).bg(t.border).into_any_element(),
+            ui::icon_button("swap-panes", icons::SWAP, Tone::Quiet, Control::Compact, t)
+                .tooltip("Swap Panes (⌘U)")
+                .on_click(cx.listener(|this, _, window, cx| this.swap_panes(window, cx)))
+                .into_any_element(),
             ui::icon_button("refresh", icons::REFRESH, Tone::Quiet, Control::Compact, t)
                 .tooltip("Refresh (⌘R)")
                 .on_click(cx.listener(|this, _, _, cx| this.refresh(this.active, cx)))

@@ -523,6 +523,51 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Left goes right and right goes left; the focus goes with the pane
+    /// that had it.
+    pub fn swap_panes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.modal.is_some() || !self.host_questions.is_empty() {
+            return;
+        }
+        let filters = self
+            .panes
+            .each_ref()
+            .map(|pane| pane.filter.read(cx).value().to_string());
+        let [left, right] = &mut self.panes;
+        left.swap_contents(right);
+        // Listings still in flight belong to the other side now: drop them
+        // all, and ask again below.
+        let generation = left.generation.max(right.generation) + 1;
+        let tree_generation = left.tree.generation.max(right.tree.generation) + 1;
+        for pane in [left, right] {
+            pane.generation = generation;
+            pane.tree.settle(tree_generation);
+        }
+        let show_hidden = self.stored.settings.show_hidden;
+        for ix in 0..2 {
+            let text = filters[1 - ix].clone();
+            self.panes[ix]
+                .filter
+                .update(cx, |input, cx| input.set_value(text, window, cx));
+            if self.panes[ix].loading {
+                self.load(ix, cx);
+            } else {
+                let pane = &mut self.panes[ix];
+                pane.rebuild(show_hidden, cx);
+                if let Some(cursor) = pane.cursor {
+                    pane.scroll.scroll_to_item(cursor, ScrollStrategy::Nearest);
+                }
+                if pane.tree.visible {
+                    let path = pane.path.clone();
+                    pane.tree.reveal(&path);
+                    self.list_tree(ix, cx);
+                }
+            }
+        }
+        let active = 1 - self.active;
+        self.focus_pane(active, window, cx);
+    }
+
     pub fn move_cursor(&mut self, delta: isize, extend: bool, cx: &mut Context<Self>) {
         let pane = &mut self.panes[self.active];
         if pane.rows.is_empty() {
