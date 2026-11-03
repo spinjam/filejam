@@ -119,6 +119,9 @@ impl Render for Workspace {
                 let other = 1 - this.active;
                 this.focus_pane(other, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &OpenInEditor, _, cx| {
+                this.open_in_editor(this.active, None, cx)
+            }))
             .on_action(cx.listener(|this, _: &CopyToOther, _, cx| this.copy_to_other(cx)))
             .on_action(cx.listener(|this, _: &SwapPanes, window, cx| this.swap_panes(window, cx)))
             .on_action(
@@ -1254,6 +1257,10 @@ impl Workspace {
                 let (glyph, tint) = file_icon(&entry, t);
                 let weak = cx.entity().downgrade();
                 let folder = entry.kind.is_dir().then(|| pane.join(&entry.name));
+                // The files the menu's Open in Editor opens: the selection
+                // when the row is in it, else the row; folders left out.
+                let to_edit: Vec<Entry> =
+                    dragged.iter().filter(|item| !item.kind.is_dir()).cloned().collect();
                 let here = pane.path.clone();
                 let location = pane.location.clone();
                 let label = match dragged.as_slice() {
@@ -1348,12 +1355,26 @@ impl Workspace {
                             cell(layout::MODE_COLUMN_WIDTH, t.text_muted).child(entry.kind_label())
                         })
                         .context_menu(move |menu, _, _| {
+                            let editor = weak.clone();
                             let favorite = weak.clone();
                             let current = weak.clone();
                             let (folder, here, location) =
                                 (folder.clone(), here.clone(), location.clone());
                             let here_location = location.clone();
+                            let to_edit = to_edit.clone();
                             menu.item(
+                                PopupMenuItem::new("Open in Editor")
+                                    .icon(icon(icons::FILE_TEXT))
+                                    .disabled(to_edit.is_empty())
+                                    .on_click(move |_, _, cx| {
+                                        let items = to_edit.clone();
+                                        let _ = editor.update(cx, |this, cx| {
+                                            this.open_in_editor(ix, Some(items), cx)
+                                        });
+                                    }),
+                            )
+                            .separator()
+                            .item(
                                 PopupMenuItem::new("Add to Favorites")
                                     .icon(icon(icons::FOLDER))
                                     .disabled(folder.is_none())

@@ -73,6 +73,7 @@ pub mod layout {
     pub const FORM_PORT_WIDTH: f32 = 84.0;
 
     pub const SETTINGS_WIDTH: f32 = 560.0;
+    pub const SETTINGS_EDITOR_WIDTH: f32 = 200.0;
     pub const THEME_CARD_WIDTH: f32 = 164.0;
     pub const THEME_PREVIEW_HEIGHT: f32 = 64.0;
 

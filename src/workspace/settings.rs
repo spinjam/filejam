@@ -6,6 +6,8 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px,
 };
 
+use gpui_component::input::Input;
+
 use crate::{
     icons::{icon, icon as icons},
     theme::{Theme, layout},
@@ -13,6 +15,14 @@ use crate::{
 };
 
 use super::{Modal, Workspace};
+
+/// Under the editor field: what to type in it.
+#[cfg(target_os = "macos")]
+const EDITOR_HELP: &str =
+    "The app Open in Editor (F4) uses, by name, like Visual Studio Code. Empty, TextEdit.";
+#[cfg(not(target_os = "macos"))]
+const EDITOR_HELP: &str =
+    "The command Open in Editor (F4) runs, like code. Empty, the system's own.";
 
 impl Workspace {
     pub fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -66,15 +76,36 @@ impl Workspace {
             .children(themes);
 
         let show_hidden = self.stored.settings.show_hidden;
+        let editor = div()
+            .w(px(layout::SETTINGS_EDITOR_WIDTH))
+            .h(px(layout::CONTROL_HEIGHT))
+            .px(px(layout::SPACE_MD))
+            .flex()
+            .items_center()
+            .rounded(px(layout::RADIUS_CONTROL))
+            .border_1()
+            .border_color(t.border_strong)
+            .bg(t.bg)
+            .child(
+                div().flex_1().child(
+                    Input::new(&self.editor_input)
+                        .appearance(false)
+                        .p_0()
+                        .text_size(px(layout::TEXT_MD)),
+                ),
+            );
         let files = ui::well(
             t,
-            [ui::option_row(
-                t,
-                "Show hidden files",
-                "Dotfiles appear in both panes, dimmed.",
-                ui::switch("settings-hidden", show_hidden, t)
-                    .on_click(cx.listener(|this, _, _, cx| this.toggle_hidden(cx))),
-            )],
+            [
+                ui::option_row(
+                    t,
+                    "Show hidden files",
+                    "Dotfiles appear in both panes, dimmed.",
+                    ui::switch("settings-hidden", show_hidden, t)
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_hidden(cx))),
+                ),
+                ui::option_row(t, "Text editor", EDITOR_HELP, editor),
+            ],
         );
 
         let header = div()

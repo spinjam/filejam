@@ -76,6 +76,10 @@ pub struct Settings {
     pub folder_tree: [bool; 2],
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowPlace>,
+    /// The text editor Open in Editor uses: an app's name on macOS, a
+    /// command elsewhere. The system's own when unset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub editor: Option<String>,
 }
 
 /// A folder pinned to the sidebar, on this computer or on a saved site.
@@ -252,6 +256,7 @@ mod tests {
                     height: 900.,
                     maximized: true,
                 }),
+                editor: Some("Visual Studio Code".into()),
             },
             sites: vec![Site {
                 id: "web".into(),

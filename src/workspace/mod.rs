@@ -2,6 +2,7 @@
 //! transfers drawer under them. All state lives here, in one entity, so an
 //! operation that spans both panes — a copy, a drop — is one method.
 
+mod edit;
 mod form;
 mod import;
 mod pane;
@@ -137,6 +138,12 @@ pub struct Workspace {
     /// The pending save of the window's place. Replaced by each move, so a
     /// drag writes the file once, when it stops.
     save_window: Option<Task<()>>,
+    /// Remote files open in the editor, watched for saves.
+    pub editing: Vec<edit::Edited>,
+    watching: bool,
+    next_edit: u64,
+    /// The Settings field naming the text editor.
+    pub editor_input: Entity<InputState>,
 }
 
 impl Workspace {
@@ -212,6 +219,29 @@ impl Workspace {
             this.remember_window(window, cx);
         });
 
+        let editor_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder(EDITOR_PLACEHOLDER)
+                .default_value(stored.settings.editor.clone().unwrap_or_default())
+        });
+        cx.subscribe_in(&editor_input, window, |this, input, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                let typed = input.read(cx).value().trim().to_string();
+                let editor = (!typed.is_empty()).then_some(typed);
+                if this.stored.settings.editor != editor {
+                    this.stored.settings.editor = editor;
+                    this.persist();
+                }
+            }
+        })
+        .detach();
+        // The scratch copies of remote files go with the app.
+        cx.on_app_quit(|this, _| {
+            this.stop_all_editing();
+            async {}
+        })
+        .detach();
+
         let mut this = Self {
             focus: cx.focus_handle(),
             stored,
@@ -233,6 +263,10 @@ impl Workspace {
             _appearance: appearance,
             _window_bounds: window_bounds,
             save_window: None,
+            editing: Vec::new(),
+            watching: false,
+            next_edit: 0,
+            editor_input,
         };
         // The right pane starts one level into home, on Downloads when there
         // is one: two identical panes read as one pane drawn twice.
@@ -922,6 +956,7 @@ impl Workspace {
 
     /// Whatever state a site's connection is in, end it.
     fn end_connection(&mut self, id: &str) {
+        self.stop_editing(id);
         match self.conns.remove(id) {
             Some(Conn::Connected(remote)) => {
                 runtime().spawn(async move { remote.disconnect().await });
@@ -1076,6 +1111,32 @@ impl Workspace {
             to: to_side,
             to_dir: to_dir.clone(),
         };
+        let done = self.begin_transfer(job, label, direction, sites, cx);
+        cx.spawn(async move |this, cx| {
+            let _ = done.await;
+            this.update(cx, |this, cx| {
+                // Whichever pane now shows the destination lists it again.
+                for ix in 0..2 {
+                    if this.panes[ix].location == to_location && this.panes[ix].path == to_dir {
+                        this.load(ix, cx);
+                    }
+                }
+                cx.notify();
+            })
+        })
+        .detach();
+    }
+
+    /// Add a row to the transfers drawer and run `job`; the task ends with
+    /// the row, once it shows how the copy went.
+    pub(super) fn begin_transfer(
+        &mut self,
+        job: Job,
+        label: String,
+        direction: Direction,
+        sites: Vec<String>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), String>> {
         let progress = Arc::new(Progress::default());
         let id = self.next_transfer;
         self.next_transfer += 1;
@@ -1089,27 +1150,22 @@ impl Workspace {
         });
         self.transfers_visible = true;
         let task = runtime().spawn(transfer::run(job, progress));
-        cx.spawn(async move |this, cx| {
+        let done = cx.spawn(async move |this, cx| {
             let result = task.await.unwrap_or_else(|error| Err(error.to_string()));
-            this.update(cx, |this, cx| {
+            let _ = this.update(cx, |this, cx| {
                 if let Some(row) = this.transfers.iter_mut().find(|row| row.id == id) {
-                    row.state = match result {
+                    row.state = match &result {
                         Ok(()) => TransferState::Done,
-                        Err(error) => TransferState::Failed(error),
+                        Err(error) => TransferState::Failed(error.clone()),
                     };
                 }
-                // Whichever pane now shows the destination lists it again.
-                for ix in 0..2 {
-                    if this.panes[ix].location == to_location && this.panes[ix].path == to_dir {
-                        this.load(ix, cx);
-                    }
-                }
                 cx.notify();
-            })
-        })
-        .detach();
+            });
+            result
+        });
         self.poll_transfers(cx);
         cx.notify();
+        done
     }
 
     /// Repaint while anything is moving; stops itself when nothing is.
@@ -1382,6 +1438,12 @@ pub fn favorite_name(path: &str) -> String {
         name => name,
     }
 }
+
+/// What the editor field shows while empty.
+#[cfg(target_os = "macos")]
+const EDITOR_PLACEHOLDER: &str = "TextEdit";
+#[cfg(not(target_os = "macos"))]
+const EDITOR_PLACEHOLDER: &str = "code";
 
 fn valid_name(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains('/')

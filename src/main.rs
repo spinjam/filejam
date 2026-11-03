@@ -112,6 +112,7 @@ fn menus() -> Vec<Menu> {
                 MenuItem::action("New Folder", NewFolder),
                 MenuItem::action("Add to Favorites", AddToFavorites),
                 MenuItem::separator(),
+                MenuItem::action("Open in Editor", OpenInEditor),
                 MenuItem::action("Copy to Other Pane", CopyToOther),
                 MenuItem::action("Rename", Rename),
                 MenuItem::action("Delete", Delete),
