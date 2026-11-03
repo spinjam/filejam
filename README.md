@@ -27,6 +27,13 @@ cargo run --release  # optimised
   covers upload, download, local to local and remote to remote. Folders are
   copied recursively, with progress, cancel and preserved modification
   times. You are asked before anything is overwritten.
+- Open in Editor (F4, the File menu or a file's right-click menu) opens
+  files in the text editor named in Settings, or the system's own if none
+  is named. On macOS that is an app's name, like `Visual Studio Code`;
+  elsewhere it is a command, like `code`. A local file opens where it is.
+  A remote file is downloaded to a temporary copy, and every save is
+  uploaded back, as in ForkLift. The copy is deleted when you disconnect
+  or quit, unless its last upload failed.
 - New folder, rename, recursive delete (with confirmation), a filter,
   sorting by name, size, date or kind, hidden files, a breadcrumb (double
   click it to type a path, `~` works) and back/forward history.
@@ -36,7 +43,7 @@ cargo run --release  # optimised
 - Themes: Filejam Black, Dark and Light, Gruvbox, Catppuccin, GitHub, Tokyo
   Night, Dracula and One, each dark and light, all but Black also as glass.
 
-Sites are saved in `sites.toml` in the platform config directory
+Sites and settings are saved in `sites.toml` in the platform config directory
 (`~/Library/Application Support/filejam` on macOS). Passwords and
 passphrases go in the system keychain, never in the file.
 
@@ -49,6 +56,7 @@ passphrases go in the system keychain, never in the file.
 | ⌫ / ⌘↑ | enclosing folder |
 | ⌘[ ⌘] | back / forward |
 | Tab | switch pane |
+| F4 | open in editor |
 | F5 / ⌘⇧C | copy to the other pane |
 | F7 / ⌘⇧N | new folder |
 | F2 | rename |
